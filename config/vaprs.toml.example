@@ -1,0 +1,110 @@
+# vaprs - APRS iGate and digipeater configuration
+#
+# This file configures vaprs, an APRS iGate and digipeater daemon.
+# Copy to /etc/vaprs/vaprs.toml and edit for your station.
+
+# Your station callsign with SSID (required)
+mycall = "N0CALL-10"
+
+# Station location in APRS format (degrees + decimal minutes)
+[location]
+lat = "4903.50N"
+lon = "07201.75W"
+
+# APRS-IS connection settings
+[aprsis]
+# Your APRS-IS passcode (generate from callsign)
+passcode = -1
+
+# APRS-IS tier 2 server(s)
+servers = ["rotate.aprs2.net:14580"]
+
+# Server-side filter for incoming packets
+# See http://www.aprs-is.net/javAPRSFilter.aspx
+# m/100 = packets within 100 km of your station
+filter = "m/100"
+
+# Seconds before connection is considered dead if no data received
+heartbeat_timeout = 120
+
+# Logging configuration
+[logging]
+# RF packet log (one line per packet)
+rflog = "/var/log/vaprs-rf.log"
+
+# aprx-compatible log format
+aprxlog = "/var/log/vaprs.log"
+
+# Radio interface(s)
+# Each [[interface]] block defines a TNC connection.
+# Supported types: serial, tcp, ax25, agwpe, null
+
+# Serial TNC (e.g., Mobilinkd, Dire Wolf via pseudo-terminal)
+[[interface]]
+type = "serial"
+device = "/dev/ttyUSB0"
+speed = 9600
+protocol = "KISS"
+callsign = "N0CALL-10"
+
+# Set to true to enable transmitting on this interface
+tx_ok = false
+
+# Forward telemetry packets to APRS-IS
+telem_to_is = true
+
+# iGate group number (for multi-interface setups)
+igate_group = 1
+
+# TCP TNC (e.g., Dire Wolf on network)
+# [[interface]]
+# type = "tcp"
+# host = "127.0.0.1"
+# port = 8001
+# protocol = "KISS"
+# callsign = "N0CALL-10"
+# tx_ok = false
+
+# Beacon configuration
+# Each [[beacon]] block defines a periodic position/status beacon.
+
+[[beacon]]
+# APRS symbol table + symbol code
+# See http://www.aprs.org/symbols.html
+# "R&" = receive-only iGate (overlay R on diamond)
+symbol = "R&"
+
+# Free-text comment appended to beacon
+comment = "vaprs Rx-only iGate"
+
+# Beacon interval (e.g., "20m" for 20 minutes)
+cycle_size = "20m"
+
+# Where to send: radio, aprsis, or both
+# mode = "both"
+
+# Transmitter callsign (defaults to mycall)
+# transmitter = "N0CALL-10"
+
+# Digipeater path for RF beacons
+# via = "WIDE1-1"
+
+# Digipeater configuration
+# Each [[digipeater]] block sets up packet relay rules.
+
+# [[digipeater]]
+# transmitter = "N0CALL-10"
+#
+# # Rate limiting: [packets_per_minute, burst_max]
+# ratelimit = [60, 120]
+#
+# # Source filters for this digipeater
+# [[digipeater.source]]
+# source = "N0CALL-10"
+# relay_type = "digipeated"
+# viscous_delay = 0
+
+# Telemetry forwarding
+# [[telemetry]]
+# source = "N0CALL-10"
+# destination = "N0CALL-10"
