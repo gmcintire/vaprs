@@ -151,18 +151,40 @@ impl SerialInterface {
     }
 }
 
+/// Reason the KISS event loop exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KissLoopExit {
+    /// I/O stream reached EOF (remote closed).
+    Eof,
+    /// I/O read error occurred.
+    IoError,
+    /// Write error while transmitting.
+    WriteError,
+    /// Shutdown command received.
+    Shutdown,
+    /// Command channel was closed (sender dropped).
+    ChannelClosed,
+    /// Packet channel closed (receiver dropped).
+    PacketChannelClosed,
+}
+
 /// Core event loop that reads from any AsyncRead+AsyncWrite source.
 ///
 /// This is extracted from the Interface::run method to allow testing with
-/// mock I/O sources instead of real serial ports.
-async fn run_kiss_loop<T>(
+/// mock I/O sources instead of real serial ports. Also reused by the TCP
+/// KISS interface.
+///
+/// Returns the reason the loop exited, allowing callers (e.g. TCP reconnect
+/// logic) to decide whether to reconnect or stop.
+pub(crate) async fn run_kiss_loop<T>(
     mut io: T,
-    metadata: InterfaceMetadata,
-    protocol: Protocol,
+    metadata: &InterfaceMetadata,
+    protocol: &Protocol,
     watchdog_timeout: Duration,
-    packet_tx: mpsc::Sender<SharedPacket>,
-    mut cmd_rx: mpsc::Receiver<InterfaceCommand>,
-) where
+    packet_tx: &mpsc::Sender<SharedPacket>,
+    cmd_rx: &mut mpsc::Receiver<InterfaceCommand>,
+) -> KissLoopExit
+where
     T: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let mut decoder = KissDecoder::new();
@@ -170,7 +192,9 @@ async fn run_kiss_loop<T>(
     let mut last_data_time = Instant::now();
     let mut watchdog_warned = false;
 
-    info!(interface = metadata.callsign, "serial interface started");
+    info!(interface = metadata.callsign, "KISS event loop started");
+
+    let exit_reason;
 
     loop {
         let watchdog_remaining = watchdog_timeout
@@ -178,14 +202,15 @@ async fn run_kiss_loop<T>(
             .unwrap_or(Duration::ZERO);
 
         tokio::select! {
-            // Read from serial port
+            // Read from I/O source
             result = io.read(&mut read_buf) => {
                 match result {
                     Ok(0) => {
                         info!(
                             interface = metadata.callsign,
-                            "serial port closed (EOF)"
+                            "I/O stream closed (EOF)"
                         );
+                        exit_reason = KissLoopExit::Eof;
                         break;
                     }
                     Ok(n) => {
@@ -209,7 +234,7 @@ async fn run_kiss_loop<T>(
                                         interface = metadata.callsign,
                                         "packet channel closed, shutting down"
                                     );
-                                    return;
+                                    return KissLoopExit::PacketChannelClosed;
                                 }
                             }
                         }
@@ -218,8 +243,9 @@ async fn run_kiss_loop<T>(
                         error!(
                             interface = metadata.callsign,
                             error = %e,
-                            "serial port read error"
+                            "I/O read error"
                         );
+                        exit_reason = KissLoopExit::IoError;
                         break;
                     }
                 }
@@ -236,13 +262,14 @@ async fn run_kiss_loop<T>(
                             );
                             continue;
                         }
-                        if let Some(kiss_data) = prepare_transmit(&packet, &protocol) {
+                        if let Some(kiss_data) = prepare_transmit(&packet, protocol) {
                             if let Err(e) = io.write_all(&kiss_data).await {
                                 error!(
                                     interface = metadata.callsign,
                                     error = %e,
-                                    "serial port write error"
+                                    "I/O write error"
                                 );
+                                exit_reason = KissLoopExit::WriteError;
                                 break;
                             }
                             debug!(
@@ -262,6 +289,7 @@ async fn run_kiss_loop<T>(
                             interface = metadata.callsign,
                             "shutdown command received"
                         );
+                        exit_reason = KissLoopExit::Shutdown;
                         break;
                     }
                     None => {
@@ -269,6 +297,7 @@ async fn run_kiss_loop<T>(
                             interface = metadata.callsign,
                             "command channel closed, shutting down"
                         );
+                        exit_reason = KissLoopExit::ChannelClosed;
                         break;
                     }
                 }
@@ -288,7 +317,12 @@ async fn run_kiss_loop<T>(
         }
     }
 
-    info!(interface = metadata.callsign, "serial interface stopped");
+    info!(
+        interface = metadata.callsign,
+        reason = ?exit_reason,
+        "KISS event loop stopped"
+    );
+    exit_reason
 }
 
 impl Interface for SerialInterface {
@@ -299,7 +333,7 @@ impl Interface for SerialInterface {
     fn run(
         self: Box<Self>,
         packet_tx: mpsc::Sender<SharedPacket>,
-        cmd_rx: mpsc::Receiver<InterfaceCommand>,
+        mut cmd_rx: mpsc::Receiver<InterfaceCommand>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
             let builder = tokio_serial::new(&self.device, self.speed);
@@ -327,11 +361,11 @@ impl Interface for SerialInterface {
 
             run_kiss_loop(
                 port,
-                self.metadata,
-                self.protocol,
+                &self.metadata,
+                &self.protocol,
                 self.watchdog_timeout,
-                packet_tx,
-                cmd_rx,
+                &packet_tx,
+                &mut cmd_rx,
             )
             .await;
         })
@@ -363,6 +397,28 @@ mod tests {
     /// Wrap AX.25 bytes in a KISS frame (FEND + cmd_byte + escaped_data + FEND).
     fn wrap_in_kiss(ax25_data: &[u8]) -> Vec<u8> {
         kiss_encode(ax25_data, 0x00, KissVariant::Plain)
+    }
+
+    /// Test helper: wraps run_kiss_loop with owned values so it can be spawned.
+    async fn spawn_kiss_loop<T>(
+        io: T,
+        metadata: InterfaceMetadata,
+        protocol: Protocol,
+        watchdog_timeout: Duration,
+        packet_tx: mpsc::Sender<SharedPacket>,
+        mut cmd_rx: mpsc::Receiver<InterfaceCommand>,
+    ) where
+        T: AsyncReadExt + AsyncWriteExt + Unpin,
+    {
+        run_kiss_loop(
+            io,
+            &metadata,
+            &protocol,
+            watchdog_timeout,
+            &packet_tx,
+            &mut cmd_rx,
+        )
+        .await;
     }
 
     // --- protocol_to_kiss_variant tests ---
@@ -624,7 +680,7 @@ mod tests {
             drop(writer);
         });
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -660,7 +716,7 @@ mod tests {
             igate_group: 1,
         };
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -692,7 +748,7 @@ mod tests {
             igate_group: 1,
         };
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -736,7 +792,7 @@ mod tests {
             igate_group: 1,
         };
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             writer,
             metadata,
             Protocol::Kiss,
@@ -795,7 +851,7 @@ mod tests {
             igate_group: 1,
         };
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             writer,
             metadata,
             Protocol::Kiss,
@@ -855,7 +911,7 @@ mod tests {
             drop(writer);
         });
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -907,7 +963,7 @@ mod tests {
             drop(writer);
         });
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -941,7 +997,7 @@ mod tests {
         };
 
         // Very short watchdog timeout for testing
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -997,7 +1053,7 @@ mod tests {
             drop(writer);
         });
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
@@ -1033,7 +1089,7 @@ mod tests {
         // Immediately close the writer to cause EOF
         drop(writer);
 
-        let loop_handle = tokio::spawn(run_kiss_loop(
+        let loop_handle = tokio::spawn(spawn_kiss_loop(
             reader,
             metadata,
             Protocol::Kiss,
