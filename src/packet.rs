@@ -65,11 +65,7 @@ mod tests {
 
     #[test]
     fn test_packet_creation() {
-        let pkt = Packet::new(
-            "OH2MQK-1>APRS:!6029.50N/02505.43E>",
-            "port0",
-            true,
-        );
+        let pkt = Packet::new("OH2MQK-1>APRS:!6029.50N/02505.43E>", "port0", true);
         assert_eq!(pkt.source_interface, "port0");
         assert!(pkt.is_aprs);
         assert_eq!(pkt.tnc2_addr_len, 13); // "OH2MQK-1>APRS" is 13 chars

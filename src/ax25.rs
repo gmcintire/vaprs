@@ -26,10 +26,7 @@ pub fn encode_ax25_address(callsign: &str, ssid_flags: u8) -> Result<[u8; 7], Va
             .parse()
             .map_err(|_| VaprsError::Ax25(format!("invalid SSID: {}", ssid_str)))?;
         if ssid > 15 {
-            return Err(VaprsError::Ax25(format!(
-                "SSID {} out of range 0-15",
-                ssid
-            )));
+            return Err(VaprsError::Ax25(format!("SSID {} out of range 0-15", ssid)));
         }
         (call, ssid)
     } else {

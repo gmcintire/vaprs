@@ -21,10 +21,7 @@ pub enum VaprsError {
     Callsign(String),
 
     #[error("interface error on {interface}: {message}")]
-    Interface {
-        interface: String,
-        message: String,
-    },
+    Interface { interface: String, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, VaprsError>;
