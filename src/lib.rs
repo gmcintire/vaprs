@@ -4,6 +4,7 @@ pub mod config;
 pub mod crc;
 pub mod digipeater;
 pub mod error;
+pub mod history;
 pub mod igate;
 pub mod interface;
 pub mod kiss;
