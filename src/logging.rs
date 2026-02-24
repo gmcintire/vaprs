@@ -195,7 +195,7 @@ mod tests {
         let entry = format_rf_log_entry("test", 'R', "A>B:c");
         // Extract the year - should be reasonable (2024-2030 range)
         let year: u64 = entry[..4].parse().unwrap();
-        assert!(year >= 2024 && year <= 2030, "year {} out of range", year);
+        assert!((2024..=2030).contains(&year), "year {} out of range", year);
     }
 
     #[test]

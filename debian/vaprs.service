@@ -1,0 +1,24 @@
+[Unit]
+Description=vaprs APRS iGate and Digipeater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/vaprs
+ExecStart=/usr/sbin/vaprs -i -f /etc/vaprs/vaprs.toml
+Restart=on-failure
+RestartSec=10
+User=vaprs
+Group=vaprs
+ProtectSystem=strict
+ReadWritePaths=/var/log/vaprs /var/run
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

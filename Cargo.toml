@@ -40,5 +40,8 @@ assets = [
     ["target/release/vaprs", "usr/sbin/", "755"],
     ["config/vaprs.toml.example", "etc/vaprs/vaprs.toml", "644"],
     ["debian/vaprs.service", "lib/systemd/system/", "644"],
+    ["debian/vaprs.default", "etc/default/vaprs", "644"],
+    ["debian/vaprs.logrotate", "etc/logrotate.d/vaprs", "644"],
 ]
-conf-files = ["/etc/vaprs/vaprs.toml"]
+conf-files = ["/etc/vaprs/vaprs.toml", "/etc/default/vaprs"]
+maintainer-scripts = "debian/"

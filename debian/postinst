@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create vaprs system user and group if they don't exist
+        if ! getent group vaprs >/dev/null 2>&1; then
+            addgroup --system vaprs
+        fi
+        if ! getent passwd vaprs >/dev/null 2>&1; then
+            adduser --system --ingroup vaprs --no-create-home \
+                --home /nonexistent --gecos "vaprs APRS daemon" vaprs
+        fi
+        # Add vaprs user to dialout group for serial port access
+        if getent group dialout >/dev/null 2>&1; then
+            usermod -a -G dialout vaprs 2>/dev/null || true
+        fi
+        # Create log directory
+        install -d -o vaprs -g vaprs -m 750 /var/log/vaprs
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

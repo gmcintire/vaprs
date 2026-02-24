@@ -1,0 +1,8 @@
+# Defaults for vaprs
+# Sourced by systemd EnvironmentFile
+
+# Additional options for vaprs daemon
+# VAPRS_OPTS=""
+
+# Configuration file location
+# VAPRS_CONFIG="/etc/vaprs/vaprs.toml"
