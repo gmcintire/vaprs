@@ -122,20 +122,28 @@ jobs:
           path: artifacts
 
       - name: Set up SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          echo "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
 
       - name: Upload .deb packages
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
+          HOST=$(echo "$DEPLOY_HOST" | tr -d '[:space:]')
           for deb in $(find artifacts -type f -name '*.deb'); do
-            scp -i ~/.ssh/deploy_key "$deb" graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/
+            scp -i ~/.ssh/deploy_key "$deb" "graham@${HOST}:apps/vaprs-incoming/"
           done
 
       - name: Import into APT repo
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
-            graham@${{ secrets.DEPLOY_HOST }} \
-            ./import-debs.sh
+          HOST=$(echo "$DEPLOY_HOST" | tr -d '[:space:]')
+          ssh -i ~/.ssh/deploy_key "graham@${HOST}" ./import-debs.sh
