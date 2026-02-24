@@ -4,6 +4,7 @@
 // Filters packets received on RF and forwards valid ones to APRS-IS
 // with appropriate q-construct headers (qAR = heard on RF by iGate).
 
+use crate::history::HistoryDb;
 use crate::packet::Packet;
 
 /// Prefixes that are forbidden in the source callsign field.
@@ -114,6 +115,103 @@ pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> Option<String> {
     // Build the gated packet with q-construct
     let addresses = packet.addresses();
     Some(format!("{},qAR,{}:{}", addresses, gate_call, payload))
+}
+
+/// Additional forbidden prefixes for Tx-iGate via checking.
+/// Packets from APRS-IS containing these in any address field or via path are rejected.
+const TX_FORBIDDEN_VIA: &[&str] = &["TCPXX", "NOGATE", "RFONLY", "qAX"];
+
+/// Check if a packet from APRS-IS should be gated to RF.
+/// Returns `Some(third_party_frame)` if it should be gated, `None` if not.
+///
+/// The third-party frame format is: `}SRC>DST,TCPIP,GATECALL*:payload`
+///
+/// Parameters:
+/// - `packet`: the packet received from APRS-IS
+/// - `gate_call`: this iGate's callsign
+/// - `history`: the RF history database
+pub fn gate_to_rf(packet: &Packet, gate_call: &str, history: &HistoryDb) -> Option<String> {
+    let payload = packet.payload();
+
+    // Drop query packets (payload starts with '?')
+    if payload.starts_with('?') {
+        return None;
+    }
+
+    // Drop 3rd-party frames from APRS-IS (payload starts with '}')
+    if payload.starts_with('}') {
+        return None;
+    }
+
+    // Only gate message packets (payload starts with ':')
+    if !payload.starts_with(':') {
+        return None;
+    }
+
+    // Check forbidden addresses: source, destination, and via path
+    let source = packet.source_call();
+    let dest = packet.dest_call();
+
+    // Check source against Tx forbidden prefixes
+    if TX_FORBIDDEN_VIA
+        .iter()
+        .any(|prefix| source.starts_with(prefix))
+    {
+        return None;
+    }
+
+    // Check destination against Tx forbidden prefixes
+    if TX_FORBIDDEN_VIA
+        .iter()
+        .any(|prefix| dest.starts_with(prefix))
+    {
+        return None;
+    }
+
+    // Check via path against Tx forbidden prefixes
+    let via_calls = extract_via_callsigns(packet.addresses());
+    for via in &via_calls {
+        let clean = via.strip_suffix('*').unwrap_or(via);
+        if TX_FORBIDDEN_VIA
+            .iter()
+            .any(|prefix| clean.starts_with(prefix))
+        {
+            return None;
+        }
+    }
+
+    // Verify the message addressee was heard recently on RF.
+    // The recipient is encoded in the payload as the 9-char addressee field,
+    // not the packet header destination.
+    let addressee = extract_message_addressee(payload);
+    if !history.was_heard(addressee) {
+        return None;
+    }
+
+    // Verify source station was NOT heard recently on RF
+    // (if they're local, they don't need internet-to-RF gating)
+    if history.was_heard(source) {
+        return None;
+    }
+
+    // Format as 3rd-party frame: }SRC>DST,TCPIP,GATECALL*:payload
+    Some(format!(
+        "}}{}>{},TCPIP,{}*:{}",
+        source, dest, gate_call, payload
+    ))
+}
+
+/// Extract the addressee from an APRS message payload.
+/// Message format: `:ADDRESSEE :message text{id`
+/// The addressee is 9 characters after the initial ':', padded with spaces.
+fn extract_message_addressee(payload: &str) -> &str {
+    // Payload starts with ':', addressee is next 9 chars, then ':'
+    let after_colon = &payload[1..]; // skip the leading ':'
+                                     // Find the next ':' which terminates the addressee field
+    match after_colon.find(':') {
+        Some(pos) => after_colon[..pos].trim(),
+        None => after_colon.trim(),
+    }
 }
 
 #[cfg(test)]
@@ -349,5 +447,134 @@ mod tests {
         // Payload starting with '!' (position report) should pass
         let result = gate_to_aprsis(&pkt("TEST>APRS:!4903.50N/07201.75W-"), "GATE");
         assert!(result.is_some());
+    }
+
+    // --- Tx-iGate (gate_to_rf) tests ---
+
+    fn make_history() -> HistoryDb {
+        HistoryDb::new(crate::history::DEFAULT_TTL)
+    }
+
+    #[test]
+    fn test_gate_to_rf_valid_message() {
+        // APRS message to station heard on RF gets gated
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS,qAR,SOMEGATE::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_gate_to_rf_dest_not_heard() {
+        // If the message addressee is not in historydb, don't gate
+        let history = make_history();
+        // WA1ABC not heard on RF
+        let p = pkt("KB1ABC>APRS::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_source_heard_on_rf() {
+        // If source IS heard on RF, don't gate (they're local, no need)
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+        history.heard("KB1ABC", "radio0", None); // source also on RF
+
+        let p = pkt("KB1ABC>APRS::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_not_a_message() {
+        // Position reports (payload starting with '!') NOT gated
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS:!4903.50N/07201.75W-");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_third_party_rejected() {
+        // 3rd-party frames from APRS-IS rejected
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS:}TEST>APRS::WA1ABC   :Hello");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_forbidden_tcpxx() {
+        // TCPXX in via path rejected
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS,TCPXX::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_forbidden_nogate() {
+        // NOGATE in via path rejected
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS,NOGATE::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_forbidden_rfonly() {
+        // RFONLY in via path rejected
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS,RFONLY::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_forbidden_qax() {
+        // qAX in via path rejected
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS,qAX::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gate_to_rf_format() {
+        // Verify 3rd-party frame format: }SRC>DST,TCPIP,GATECALL*:payload
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS::WA1ABC   :Hello{123");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_some());
+        let frame = result.unwrap();
+        assert_eq!(frame, "}KB1ABC>APRS,TCPIP,MYGATE*::WA1ABC   :Hello{123");
+    }
+
+    #[test]
+    fn test_gate_to_rf_query_rejected() {
+        // Query packets ('?') rejected for Tx
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+
+        let p = pkt("KB1ABC>APRS:?APRS?");
+        let result = gate_to_rf(&p, "MYGATE", &history);
+        assert!(result.is_none());
     }
 }
