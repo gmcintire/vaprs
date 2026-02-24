@@ -1,4 +1,5 @@
 pub mod dedupe;
+pub mod filter;
 pub mod viscous;
 
 use std::time::Instant;
