@@ -126,9 +126,7 @@ jobs:
 
       - name: Upload .deb packages
         run: |
-          find artifacts -name '*.deb' -exec \
-            scp -i ~/.ssh/deploy_key {} \
-            graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/ \;
+          find artifacts -name '*.deb' -exec scp -i ~/.ssh/deploy_key {} graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/ \;
 
       - name: Import into APT repo
         run: |
