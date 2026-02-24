@@ -13,4 +13,5 @@ pub mod interface;
 pub mod kiss;
 pub mod packet;
 pub mod parse_aprs;
+pub mod router;
 pub mod telemetry;
