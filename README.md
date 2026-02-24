@@ -11,7 +11,19 @@ APRS iGate and digipeater for Linux, written in Rust. A reimplementation of [apr
 - **Telemetry & monitoring** — APRS telemetry generation and per-interface Erlang statistics
 - **D-PRS gateway** — D-STAR position reporting to APRS
 
-## Building
+## Installing
+
+Packages are available for Debian/Ubuntu (amd64, arm64, armhf):
+
+```sh
+curl -fsSL https://vaprs.w5isp.com/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/vaprs.gpg
+echo "deb [signed-by=/usr/share/keyrings/vaprs.gpg] https://vaprs.w5isp.com stable main" | sudo tee /etc/apt/sources.list.d/vaprs.list
+sudo apt update && sudo apt install vaprs
+```
+
+Updates are picked up automatically by `apt upgrade`.
+
+## Building from source
 
 ```sh
 cargo build --release
