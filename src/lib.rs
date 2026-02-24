@@ -4,6 +4,7 @@ pub mod beacon;
 pub mod config;
 pub mod crc;
 pub mod digipeater;
+pub mod erlang;
 pub mod error;
 pub mod history;
 pub mod igate;
