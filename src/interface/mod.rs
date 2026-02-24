@@ -3,6 +3,7 @@
 // Each interface (serial, TCP, AX.25, AGWPE) runs as an async task communicating
 // via mpsc channels. The registry holds handles for commanding each interface.
 
+pub mod agwpe;
 pub mod serial;
 pub mod tcp;
 
