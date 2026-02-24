@@ -1,19 +1,23 @@
 #!/bin/bash
 # Set up APT repository on VPS for vaprs
-# Run this once on your VPS (vaprs.w5isp.com)
+# Run this as graham on your VPS (vaprs.w5isp.com)
 #
-# Prerequisites: root access, DNS pointing vaprs.w5isp.com to VPS
+# Prerequisites:
+#   - Caddy already running and configured to serve vaprs.w5isp.com
+#     from /home/graham/apps/vaprs
+#   - DNS pointing vaprs.w5isp.com to VPS
 #
-# Usage: sudo bash apt-repo-setup.sh
+# Usage: bash apt-repo-setup.sh
 
 set -euo pipefail
 
-REPO_DIR="/var/www/vaprs"
+REPO_DIR="$HOME/apps/vaprs"
+INCOMING_DIR="$HOME/apps/vaprs-incoming"
 GPG_NAME="vaprs APT repo <graham@w5isp.com>"
 
-echo "=== Installing dependencies ==="
-apt-get update
-apt-get install -y reprepro nginx gpg
+echo "=== Installing reprepro ==="
+sudo apt-get update
+sudo apt-get install -y reprepro gpg
 
 echo "=== Generating GPG signing key ==="
 if ! gpg --list-keys "$GPG_NAME" &>/dev/null; then
@@ -33,8 +37,9 @@ fi
 
 echo "=== Setting up reprepro ==="
 mkdir -p "$REPO_DIR"/{conf,dists,pool,db}
+mkdir -p "$INCOMING_DIR"
 
-cat > "$REPO_DIR/conf/distributions" <<'EOF'
+cat > "$REPO_DIR/conf/distributions" <<EOF
 Origin: vaprs
 Label: vaprs
 Codename: stable
@@ -44,71 +49,47 @@ Description: vaprs APRS iGate and digipeater
 SignWith: yes
 EOF
 
-cat > "$REPO_DIR/conf/options" <<'EOF'
+cat > "$REPO_DIR/conf/options" <<EOF
 verbose
-basedir /var/www/vaprs
+basedir $REPO_DIR
 EOF
 
 # Export public key for users
 gpg --armor --export "$GPG_NAME" > "$REPO_DIR/gpg.key"
 
-echo "=== Setting up nginx ==="
-cat > /etc/nginx/sites-available/vaprs <<'NGINX'
-server {
-    listen 80;
-    server_name vaprs.w5isp.com;
-
-    root /var/www/vaprs;
-    autoindex on;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-NGINX
-
-ln -sf /etc/nginx/sites-available/vaprs /etc/nginx/sites-enabled/vaprs
-nginx -t && systemctl reload nginx
-
-echo "=== Setting up deploy user ==="
-if ! id vaprs-deploy &>/dev/null; then
-    useradd -r -m -s /bin/bash vaprs-deploy
-fi
-mkdir -p /home/vaprs-deploy/.ssh /home/vaprs-deploy/incoming
-chown -R vaprs-deploy:vaprs-deploy /home/vaprs-deploy
-chown -R vaprs-deploy:vaprs-deploy "$REPO_DIR"
-
-# Import GPG key for deploy user
-sudo -u vaprs-deploy gpg --import <(gpg --armor --export-secret-keys "$GPG_NAME")
-
 echo "=== Creating import script ==="
-cat > /home/vaprs-deploy/import-debs.sh <<'SCRIPT'
+cat > "$HOME/import-debs.sh" <<SCRIPT
 #!/bin/bash
 # Import all .deb files from incoming/ into the repo
 set -euo pipefail
-INCOMING="/home/vaprs-deploy/incoming"
-REPO="/var/www/vaprs"
+INCOMING="$INCOMING_DIR"
+REPO="$REPO_DIR"
 
-for deb in "$INCOMING"/*.deb; do
-    [ -f "$deb" ] || continue
-    echo "Importing: $deb"
-    reprepro -b "$REPO" includedeb stable "$deb"
-    rm "$deb"
+for deb in "\$INCOMING"/*.deb; do
+    [ -f "\$deb" ] || continue
+    echo "Importing: \$deb"
+    reprepro -b "\$REPO" includedeb stable "\$deb"
+    rm "\$deb"
 done
 echo "Done."
 SCRIPT
-chmod +x /home/vaprs-deploy/import-debs.sh
-chown vaprs-deploy:vaprs-deploy /home/vaprs-deploy/import-debs.sh
+chmod +x "$HOME/import-debs.sh"
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "Next steps:"
-echo "  1. Add SSH public key to /home/vaprs-deploy/.ssh/authorized_keys"
-echo "  2. Set up TLS with: certbot --nginx -d vaprs.w5isp.com"
-echo "  3. Add these GitHub secrets:"
-echo "     - DEPLOY_SSH_KEY: private SSH key for vaprs-deploy user"
-echo "     - DEPLOY_HOST: vaprs.w5isp.com"
+echo "Caddy config needed (add to Caddyfile):"
+echo ""
+echo "  vaprs.w5isp.com {"
+echo "    root * $REPO_DIR"
+echo "    file_server browse"
+echo "  }"
+echo ""
+echo "Then: sudo systemctl reload caddy"
+echo ""
+echo "GitHub secrets needed:"
+echo "  - DEPLOY_SSH_KEY: private SSH key for graham@your-vps"
+echo "  - DEPLOY_HOST: vaprs.w5isp.com"
 echo ""
 echo "User install command:"
 echo '  curl -fsSL https://vaprs.w5isp.com/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/vaprs.gpg'

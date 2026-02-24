@@ -117,10 +117,10 @@ jobs:
         run: |
           scp -i ~/.ssh/deploy_key \
             artifacts/**/*.deb \
-            vaprs-deploy@${{ secrets.DEPLOY_HOST }}:incoming/
+            graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/
 
       - name: Import into APT repo
         run: |
           ssh -i ~/.ssh/deploy_key \
-            vaprs-deploy@${{ secrets.DEPLOY_HOST }} \
+            graham@${{ secrets.DEPLOY_HOST }} \
             ./import-debs.sh
