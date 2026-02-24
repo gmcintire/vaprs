@@ -9,7 +9,7 @@ license = "GPL-2.0-or-later"
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "signal", "sync", "macros", "fs"] }
 tokio-serial = "5"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
