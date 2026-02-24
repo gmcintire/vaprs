@@ -22,6 +22,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests
         run: cargo test --verbose
       - name: Clippy
@@ -53,13 +55,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cache cargo tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cross
+            ~/.cargo/bin/cargo-deb
+          key: cargo-tools-${{ runner.os }}-v1
 
       - name: Install cross
         if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: command -v cross || cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Install cargo-deb
-        run: cargo install cargo-deb
+        run: command -v cargo-deb || cargo install cargo-deb
 
       - name: Build release (native)
         if: "!matrix.use_cross"
@@ -115,9 +126,9 @@ jobs:
 
       - name: Upload .deb packages
         run: |
-          scp -i ~/.ssh/deploy_key \
-            artifacts/**/*.deb \
-            graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/
+          find artifacts -name '*.deb' -exec \
+            scp -i ~/.ssh/deploy_key {} \
+            graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/ \;
 
       - name: Import into APT repo
         run: |
