@@ -188,7 +188,10 @@ impl AprsIsClient {
 
         // Send login line
         let login = self.login_line();
-        debug!("APRS-IS: sending login: {}", login.trim());
+        debug!(
+            "APRS-IS: sending login: user {} pass ***** vers vaprs 0.1",
+            self.login
+        );
         if let Err(e) = writer.write_all(login.as_bytes()).await {
             return ConnectionResult::Disconnected(format!("login write failed: {}", e));
         }

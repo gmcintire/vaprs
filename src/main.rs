@@ -66,6 +66,9 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Warn if config file is world-writable (security risk)
+    check_config_permissions(&cli.config);
+
     let config = match Config::load(&cli.config) {
         Ok(c) => c,
         Err(e) => {
@@ -361,7 +364,42 @@ async fn async_main(config: Config, erlang_enabled: bool) {
 }
 
 /// Write the current process PID to a file.
+///
+/// Uses create_new to fail if the file already exists (another instance running).
 fn write_pid_file(path: &str) -> std::io::Result<()> {
+    use std::io::Write;
     let pid = std::process::id();
-    std::fs::write(path, format!("{}\n", pid))
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    writeln!(file, "{}", pid)
 }
+
+/// Check config file permissions and warn if world-writable.
+#[cfg(unix)]
+fn check_config_permissions(path: &str) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = meta.mode();
+        if mode & 0o002 != 0 {
+            eprintln!(
+                "WARNING: config file {} is world-writable (mode {:o}). \
+                 This is a security risk — it may contain APRS-IS credentials \
+                 and beacon exec commands.",
+                path,
+                mode & 0o777
+            );
+        }
+        if mode & 0o020 != 0 {
+            eprintln!(
+                "WARNING: config file {} is group-writable (mode {:o}).",
+                path,
+                mode & 0o777
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn check_config_permissions(_path: &str) {}

@@ -364,31 +364,63 @@ fn maybe_add_via(packet: &str, via: Option<&str>) -> String {
 }
 
 /// Run a command and capture its stdout, with a timeout.
-fn run_beacon_command(command: &str, _timeout: Duration) -> Option<String> {
+///
+/// The command is executed via `sh -c` and killed if it exceeds the timeout.
+/// Commands come from the config file which must be protected with appropriate
+/// file permissions (owned by root, mode 0644).
+fn run_beacon_command(command: &str, timeout: Duration) -> Option<String> {
     use std::process::Command;
 
-    let result = Command::new("sh").arg("-c").arg(command).output();
-
-    match result {
-        Ok(output) => {
-            if !output.status.success() {
-                warn!(
-                    command = %command,
-                    status = %output.status,
-                    "beacon exec command failed"
-                );
-                return None;
-            }
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
-        }
+    let mut child = match Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
         Err(e) => {
             warn!(command = %command, error = %e, "failed to execute beacon command");
-            None
+            return None;
+        }
+    };
+
+    // Wait with timeout
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    warn!(
+                        command = %command,
+                        status = %status,
+                        "beacon exec command failed"
+                    );
+                    return None;
+                }
+                let output = child.wait_with_output().ok()?;
+                let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                return if text.is_empty() { None } else { Some(text) };
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    warn!(
+                        command = %command,
+                        timeout_secs = timeout.as_secs(),
+                        "beacon exec command timed out, killing"
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                warn!(command = %command, error = %e, "failed to check beacon command status");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
 }
