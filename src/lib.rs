@@ -2,6 +2,7 @@ pub mod aprsis;
 pub mod ax25;
 pub mod config;
 pub mod crc;
+pub mod digipeater;
 pub mod error;
 pub mod igate;
 pub mod interface;
