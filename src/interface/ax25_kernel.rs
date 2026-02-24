@@ -30,7 +30,6 @@ pub fn is_available() -> bool {
 #[cfg(target_os = "linux")]
 pub struct Ax25KernelInterface {
     metadata: super::InterfaceMetadata,
-    callsign: String,
     device: String,
 }
 
@@ -46,12 +45,11 @@ impl Ax25KernelInterface {
     pub fn new(callsign: String, device: String, tx_ok: bool, igate_group: u8) -> Self {
         Self {
             metadata: super::InterfaceMetadata {
-                callsign: callsign.clone(),
+                callsign,
                 iface_type: crate::config::InterfaceType::Ax25,
                 tx_ok,
                 igate_group,
             },
-            callsign,
             device,
         }
     }
@@ -136,7 +134,6 @@ mod tests {
         fn kernel_interface_stores_device() {
             let iface = Ax25KernelInterface::new("TEST-1".to_string(), "ax0".to_string(), false, 1);
             assert_eq!(iface.device, "ax0");
-            assert_eq!(iface.callsign, "TEST-1");
         }
 
         #[tokio::test]
