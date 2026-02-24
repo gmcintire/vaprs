@@ -1,5 +1,6 @@
 pub mod aprsis;
 pub mod ax25;
+pub mod beacon;
 pub mod config;
 pub mod crc;
 pub mod digipeater;
