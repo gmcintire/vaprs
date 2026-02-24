@@ -120,23 +120,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v3
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
 
       - name: Upload .deb packages
         run: |
-          find artifacts -name '*.deb' -exec scp -i ~/.ssh/deploy_key {} graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/ \;
+          for deb in $(find artifacts -name '*.deb'); do
+            scp -i ~/.ssh/deploy_key "$deb" graham@${{ secrets.DEPLOY_HOST }}:apps/vaprs-incoming/
+          done
 
       - name: Import into APT repo
         run: |
