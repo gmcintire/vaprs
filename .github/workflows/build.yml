@@ -132,6 +132,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           echo "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
 
+      - name: Test SSH connection
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          HOST=$(echo "$DEPLOY_HOST" | tr -d '[:space:]')
+          ssh -vvv -i ~/.ssh/deploy_key "graham@${HOST}" echo "SSH OK"
+
       - name: Upload .deb packages
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
