@@ -10,3 +10,4 @@ pub mod igate;
 pub mod interface;
 pub mod kiss;
 pub mod packet;
+pub mod telemetry;
