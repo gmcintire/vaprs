@@ -6,10 +6,13 @@
 # Your station callsign with SSID (required)
 mycall = "N0CALL-10"
 
-# Station location in APRS format (degrees + decimal minutes)
+# Station location — decimal degrees or APRS format (DDMM.MMN/DDDMM.MMW)
 [location]
-lat = "4903.50N"
-lon = "07201.75W"
+lat = 49.0583
+lon = -72.0292
+# Or use APRS format directly:
+# lat = "4903.50N"
+# lon = "07201.75W"
 
 # APRS-IS connection settings
 [aprsis]

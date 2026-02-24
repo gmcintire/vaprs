@@ -41,6 +41,18 @@ vaprs uses TOML configuration. See [`config/vaprs.toml.example`](config/vaprs.to
 vaprs -f /etc/vaprs/vaprs.toml
 ```
 
+Location can be specified as decimal degrees or traditional APRS format:
+
+```toml
+[location]
+lat = 33.45
+lon = -96.78
+
+# Or APRS format (DDMM.MMN / DDDMM.MMW):
+# lat = "3327.00N"
+# lon = "09646.80W"
+```
+
 ## Usage
 
 ```

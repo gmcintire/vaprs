@@ -28,9 +28,90 @@ pub enum Protocol {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "RawLocationConfig")]
 pub struct LocationConfig {
+    /// Latitude in APRS format: DDMM.MMN or DDMM.MMS
     pub lat: String,
+    /// Longitude in APRS format: DDDMM.MME or DDDMM.MMW
     pub lon: String,
+}
+
+/// Raw config before conversion — accepts either decimal degrees or APRS format.
+#[derive(Deserialize)]
+struct RawLocationConfig {
+    lat: toml::Value,
+    lon: toml::Value,
+}
+
+/// Convert decimal degrees latitude to APRS DDMM.MMN/S format.
+fn decimal_lat_to_aprs(deg: f64) -> Result<String, String> {
+    if !(-90.0..=90.0).contains(&deg) {
+        return Err(format!("latitude {deg} out of range -90..90"));
+    }
+    let hemi = if deg >= 0.0 { 'N' } else { 'S' };
+    let deg = deg.abs();
+    let d = deg as u32;
+    let m = (deg - d as f64) * 60.0;
+    Ok(format!("{:02}{:05.2}{}", d, m, hemi))
+}
+
+/// Convert decimal degrees longitude to APRS DDDMM.MME/W format.
+fn decimal_lon_to_aprs(deg: f64) -> Result<String, String> {
+    if !(-180.0..=180.0).contains(&deg) {
+        return Err(format!("longitude {deg} out of range -180..180"));
+    }
+    let hemi = if deg >= 0.0 { 'E' } else { 'W' };
+    let deg = deg.abs();
+    let d = deg as u32;
+    let m = (deg - d as f64) * 60.0;
+    Ok(format!("{:03}{:05.2}{}", d, m, hemi))
+}
+
+/// Returns true if the string looks like APRS DDMM.MM[NS] or DDDMM.MM[EW] format.
+fn is_aprs_format(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() < 6 {
+        return false;
+    }
+    let last = s.as_bytes()[s.len() - 1];
+    matches!(last, b'N' | b'S' | b'E' | b'W')
+        && s[..s.len() - 1]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b'.')
+}
+
+impl TryFrom<RawLocationConfig> for LocationConfig {
+    type Error = String;
+
+    fn try_from(raw: RawLocationConfig) -> Result<Self, String> {
+        let lat = match raw.lat {
+            toml::Value::Float(f) => decimal_lat_to_aprs(f)?,
+            toml::Value::Integer(i) => decimal_lat_to_aprs(i as f64)?,
+            toml::Value::String(s) => {
+                if is_aprs_format(&s) {
+                    s
+                } else {
+                    let f: f64 = s.parse().map_err(|_| format!("invalid latitude: {s}"))?;
+                    decimal_lat_to_aprs(f)?
+                }
+            }
+            other => return Err(format!("invalid latitude type: {other}")),
+        };
+        let lon = match raw.lon {
+            toml::Value::Float(f) => decimal_lon_to_aprs(f)?,
+            toml::Value::Integer(i) => decimal_lon_to_aprs(i as f64)?,
+            toml::Value::String(s) => {
+                if is_aprs_format(&s) {
+                    s
+                } else {
+                    let f: f64 = s.parse().map_err(|_| format!("invalid longitude: {s}"))?;
+                    decimal_lon_to_aprs(f)?
+                }
+            }
+            other => return Err(format!("invalid longitude type: {other}")),
+        };
+        Ok(LocationConfig { lat, lon })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -281,5 +362,101 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.beacons.len(), 1);
         assert_eq!(config.beacons[0].symbol.as_deref(), Some("R&"));
+    }
+
+    #[test]
+    fn test_location_aprs_format_passthrough() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = "4903.50N"
+            lon = "07201.75W"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let loc = config.location.unwrap();
+        assert_eq!(loc.lat, "4903.50N");
+        assert_eq!(loc.lon, "07201.75W");
+    }
+
+    #[test]
+    fn test_location_decimal_degrees_float() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = 33.45
+            lon = -96.78
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let loc = config.location.unwrap();
+        assert_eq!(loc.lat, "3327.00N");
+        assert_eq!(loc.lon, "09646.80W");
+    }
+
+    #[test]
+    fn test_location_decimal_degrees_integer() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = 33
+            lon = -97
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let loc = config.location.unwrap();
+        assert_eq!(loc.lat, "3300.00N");
+        assert_eq!(loc.lon, "09700.00W");
+    }
+
+    #[test]
+    fn test_location_decimal_degrees_string() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = "33.45"
+            lon = "-96.78"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let loc = config.location.unwrap();
+        assert_eq!(loc.lat, "3327.00N");
+        assert_eq!(loc.lon, "09646.80W");
+    }
+
+    #[test]
+    fn test_location_southern_hemisphere() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = -33.86
+            lon = 151.21
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let loc = config.location.unwrap();
+        assert!(loc.lat.ends_with('S'));
+        assert!(loc.lon.ends_with('E'));
+    }
+
+    #[test]
+    fn test_location_out_of_range() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [location]
+            lat = 91.0
+            lon = 0.0
+        "#;
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decimal_lat_to_aprs() {
+        assert_eq!(decimal_lat_to_aprs(0.0).unwrap(), "0000.00N");
+        assert_eq!(decimal_lat_to_aprs(49.0583333).unwrap(), "4903.50N");
+        assert_eq!(decimal_lat_to_aprs(-33.86).unwrap(), "3351.60S");
+    }
+
+    #[test]
+    fn test_decimal_lon_to_aprs() {
+        assert_eq!(decimal_lon_to_aprs(0.0).unwrap(), "00000.00E");
+        assert_eq!(decimal_lon_to_aprs(-72.029167).unwrap(), "07201.75W");
+        assert_eq!(decimal_lon_to_aprs(151.21).unwrap(), "15112.60E");
     }
 }
