@@ -16,8 +16,8 @@ APRS iGate and digipeater for Linux, written in Rust. A reimplementation of [apr
 Packages are available for Debian/Ubuntu (amd64, arm64, armhf):
 
 ```sh
-curl -fsSL https://vaprs.w5isp.com/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/vaprs.gpg
-echo "deb [signed-by=/usr/share/keyrings/vaprs.gpg] https://vaprs.w5isp.com stable main" | sudo tee /etc/apt/sources.list.d/vaprs.list
+curl -fsSL https://gmcintire.github.io/vaprs/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/vaprs.gpg
+echo "deb [signed-by=/usr/share/keyrings/vaprs.gpg] https://gmcintire.github.io/vaprs stable main" | sudo tee /etc/apt/sources.list.d/vaprs.list
 sudo apt update && sudo apt install vaprs
 ```
 
