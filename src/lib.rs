@@ -11,6 +11,7 @@ pub mod history;
 pub mod igate;
 pub mod interface;
 pub mod kiss;
+pub mod logging;
 pub mod packet;
 pub mod parse_aprs;
 pub mod router;
