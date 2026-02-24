@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -24,74 +25,69 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
-  build-native:
-    name: Build (x86_64)
+  build:
+    name: Build (${{ matrix.target }})
     runs-on: ubuntu-latest
     needs: test
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+            use_cross: true
+          - target: armv7-unknown-linux-gnueabihf
+            arch: armhf
+            use_cross: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
-      - name: Build release
-        run: cargo build --release
-      - name: Build .deb package
-        run: cargo deb --no-build
-      - name: Upload .deb artifact
-        uses: actions/upload-artifact@v4
         with:
-          name: vaprs-amd64.deb
-          path: target/debian/*.deb
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-  build-arm64:
-    name: Build (aarch64)
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cross-compilation tools
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
-      - name: Build release
-        run: cargo build --release --target aarch64-unknown-linux-gnu
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-      - name: Build .deb package
-        run: cargo deb --no-build --target aarch64-unknown-linux-gnu
-      - name: Upload .deb artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vaprs-arm64.deb
-          path: target/aarch64-unknown-linux-gnu/debian/*.deb
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-  build-armv7:
-    name: Build (armv7)
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-unknown-linux-gnueabihf
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cross-compilation tools
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
       - name: Install cargo-deb
         run: cargo install cargo-deb
-      - name: Build release
-        run: cargo build --release --target armv7-unknown-linux-gnueabihf
-        env:
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+
+      - name: Build release (native)
+        if: "!matrix.use_cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release (cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
       - name: Build .deb package
-        run: cargo deb --no-build --target armv7-unknown-linux-gnueabihf
+        run: cargo deb --no-build --target ${{ matrix.target }}
+
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vaprs-armhf.deb
-          path: target/armv7-unknown-linux-gnueabihf/debian/*.deb
+          name: vaprs-${{ matrix.arch }}.deb
+          path: target/${{ matrix.target }}/debian/*.deb
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.deb
+          generate_release_notes: true
