@@ -1,6 +1,6 @@
 # vaprs
 
-APRS iGate and digipeater for Linux, written in Rust. A reimplementation of [aprx](https://github.com/PhirePhly/aprx).
+APRS iGate and digipeater for Linux, written in Rust. A reimplementation of [aprx](https://github.com/PhirePhly/aprx). The name is from the small community I live in, Verona (yes, I am very uncreative with naming).
 
 ## Features
 
