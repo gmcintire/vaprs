@@ -27,6 +27,16 @@
     pauseBtn:   document.getElementById('pause-btn'),
     erlangTbody: document.querySelector('#erlang-table tbody'),
     stationsTbody: document.querySelector('#stations-table tbody'),
+    igRxRf:     document.getElementById('ig-rx-rf'),
+    igGated:    document.getElementById('ig-gated'),
+    igRate:     document.getElementById('ig-rate'),
+    igUnique:   document.getElementById('ig-unique'),
+    igDropped:  document.getElementById('ig-dropped'),
+    igDropQuery: document.getElementById('ig-drop-query'),
+    igDropSrc:  document.getElementById('ig-drop-src'),
+    igDropDst:  document.getElementById('ig-drop-dst'),
+    igDropVia:  document.getElementById('ig-drop-via'),
+    igDropDepth: document.getElementById('ig-drop-depth'),
   };
 
   // ── Formatting helpers ──
@@ -100,6 +110,9 @@
     // Traffic
     el.traffic.textContent = 'Rx: ' + s.rx_per_min + '  Tx: ' + s.tx_per_min;
 
+    // iGate stats
+    renderIgateStats(s.igate_stats);
+
     // Erlang table
     renderErlang(s.erlang_stats);
 
@@ -108,6 +121,23 @@
 
     // Packets — full rebuild on state event
     renderPacketFeed(s.recent_packets);
+  }
+
+  function renderIgateStats(ig) {
+    if (!ig) return;
+    el.igRxRf.textContent = ig.rx_from_rf;
+    el.igGated.textContent = ig.gated_to_aprsis;
+    var rate = ig.rx_from_rf > 0
+      ? ((ig.gated_to_aprsis / ig.rx_from_rf) * 100).toFixed(1)
+      : '0.0';
+    el.igRate.textContent = rate + '%';
+    el.igUnique.textContent = ig.unique_stations_gated;
+    el.igDropped.textContent = ig.dropped_total;
+    el.igDropQuery.textContent = ig.dropped_query;
+    el.igDropSrc.textContent = ig.dropped_forbidden_source;
+    el.igDropDst.textContent = ig.dropped_forbidden_dest;
+    el.igDropVia.textContent = ig.dropped_forbidden_via;
+    el.igDropDepth.textContent = ig.dropped_depth_exceeded;
   }
 
   function renderErlang(stats) {

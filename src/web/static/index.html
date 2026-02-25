@@ -59,6 +59,52 @@
   </div>
 
   <div class="section">
+    <div class="section-header">iGate Statistics</div>
+    <div class="igate-stats" id="igate-stats">
+      <div class="igate-stat">
+        <span class="igate-stat-label">RF Rx</span>
+        <span class="igate-stat-value" id="ig-rx-rf">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Gated</span>
+        <span class="igate-stat-value accent-green" id="ig-gated">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Gate %</span>
+        <span class="igate-stat-value" id="ig-rate">0.0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Unique</span>
+        <span class="igate-stat-value" id="ig-unique">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Dropped</span>
+        <span class="igate-stat-value accent-red" id="ig-dropped">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Query</span>
+        <span class="igate-stat-value" id="ig-drop-query">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Bad Src</span>
+        <span class="igate-stat-value" id="ig-drop-src">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Bad Dst</span>
+        <span class="igate-stat-value" id="ig-drop-dst">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Bad Via</span>
+        <span class="igate-stat-value" id="ig-drop-via">0</span>
+      </div>
+      <div class="igate-stat">
+        <span class="igate-stat-label">Depth</span>
+        <span class="igate-stat-value" id="ig-drop-depth">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
     <div class="section-header">Erlang Statistics</div>
     <table id="erlang-table" class="data-table">
       <thead>

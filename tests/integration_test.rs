@@ -142,12 +142,14 @@ async fn test_igate_filtering_through_router() {
 
     // Apply iGate filtering
     let gated = vaprs::igate::gate_to_aprsis(&received, "MYGATE-10");
-    assert!(gated.is_some());
-
-    let line = gated.unwrap();
-    assert!(line.contains("qAR,MYGATE-10"));
-    assert!(line.contains("OH2MQK-1>APRS"));
-    assert!(line.contains("!6029.50N/02505.43E>Rx-only iGate"));
+    match gated {
+        vaprs::igate::GateResult::Gated(line) => {
+            assert!(line.contains("qAR,MYGATE-10"));
+            assert!(line.contains("OH2MQK-1>APRS"));
+            assert!(line.contains("!6029.50N/02505.43E>Rx-only iGate"));
+        }
+        other => panic!("expected Gated, got {:?}", other),
+    }
 }
 
 #[tokio::test]
@@ -170,5 +172,8 @@ async fn test_forbidden_packet_filtered_by_igate() {
 
     // iGate should filter this out
     let gated = vaprs::igate::gate_to_aprsis(&received, "MYGATE");
-    assert!(gated.is_none(), "RFONLY packet should not be gated");
+    assert!(
+        !matches!(gated, vaprs::igate::GateResult::Gated(_)),
+        "RFONLY packet should not be gated"
+    );
 }

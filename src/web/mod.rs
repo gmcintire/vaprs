@@ -1,6 +1,6 @@
 pub mod server;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json;
 
 use crate::erlang::ErlangChannelSnapshot;
+use crate::igate::GateResult;
 
 /// Maximum number of recent packets kept in the ring buffer.
 const MAX_RECENT_PACKETS: usize = 200;
@@ -34,6 +35,20 @@ pub struct StationSnapshot {
     pub position: Option<(f64, f64)>,
 }
 
+/// iGate statistics counters for the dashboard.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct IgateStats {
+    pub rx_from_rf: u64,
+    pub gated_to_aprsis: u64,
+    pub dropped_total: u64,
+    pub dropped_query: u64,
+    pub dropped_forbidden_source: u64,
+    pub dropped_forbidden_dest: u64,
+    pub dropped_forbidden_via: u64,
+    pub dropped_depth_exceeded: u64,
+    pub unique_stations_gated: u64,
+}
+
 /// Dashboard state shared between the web server and the rest of the system.
 pub struct DashboardState {
     pub mycall: String,
@@ -45,6 +60,9 @@ pub struct DashboardState {
     pub recent_packets: Vec<PacketSnapshot>,
     pub packet_sequence: u64,
     pub stations: HashMap<String, StationEntry>,
+    pub igate_stats: IgateStats,
+    /// Set of callsigns that have been gated (not serialized).
+    stations_gated_set: HashSet<String>,
 }
 
 /// Internal tracking for a heard station.
@@ -70,6 +88,8 @@ impl DashboardState {
             recent_packets: Vec::new(),
             packet_sequence: 0,
             stations: HashMap::new(),
+            igate_stats: IgateStats::default(),
+            stations_gated_set: HashSet::new(),
         }
     }
 
@@ -107,6 +127,39 @@ impl DashboardState {
         entry.heard_count += 1;
         if position.is_some() {
             entry.position = position;
+        }
+    }
+
+    /// Record the result of an iGate decision for a packet from RF.
+    pub fn record_igate_result(&mut self, source_call: &str, result: &GateResult) {
+        self.igate_stats.rx_from_rf += 1;
+        match result {
+            GateResult::Gated(_) => {
+                self.igate_stats.gated_to_aprsis += 1;
+                if self.stations_gated_set.insert(source_call.to_uppercase()) {
+                    self.igate_stats.unique_stations_gated = self.stations_gated_set.len() as u64;
+                }
+            }
+            GateResult::DroppedQuery => {
+                self.igate_stats.dropped_total += 1;
+                self.igate_stats.dropped_query += 1;
+            }
+            GateResult::DroppedForbiddenSource => {
+                self.igate_stats.dropped_total += 1;
+                self.igate_stats.dropped_forbidden_source += 1;
+            }
+            GateResult::DroppedForbiddenDest => {
+                self.igate_stats.dropped_total += 1;
+                self.igate_stats.dropped_forbidden_dest += 1;
+            }
+            GateResult::DroppedForbiddenVia => {
+                self.igate_stats.dropped_total += 1;
+                self.igate_stats.dropped_forbidden_via += 1;
+            }
+            GateResult::DroppedDepthExceeded => {
+                self.igate_stats.dropped_total += 1;
+                self.igate_stats.dropped_depth_exceeded += 1;
+            }
         }
     }
 
@@ -163,6 +216,7 @@ impl DashboardState {
             stations_heard: self.stations.len(),
             rx_per_min,
             tx_per_min,
+            igate_stats: &self.igate_stats,
         };
 
         serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string())
@@ -185,6 +239,7 @@ struct DashboardJson<'a> {
     stations_heard: usize,
     rx_per_min: u64,
     tx_per_min: u64,
+    igate_stats: &'a IgateStats,
 }
 
 #[cfg(test)]
@@ -278,6 +333,66 @@ mod tests {
         assert_eq!(parsed["aprsis_connected"], true);
         assert_eq!(parsed["aprsis_server"], "rotate.aprs2.net:14580");
         assert!(parsed["uptime_secs"].as_u64().is_some());
+    }
+
+    #[test]
+    fn test_record_igate_gated() {
+        let mut state = DashboardState::new("TEST", vec![]);
+        let result = GateResult::Gated("TEST>APRS,qAR,TEST:data".to_string());
+        state.record_igate_result("OH2MQK", &result);
+
+        assert_eq!(state.igate_stats.rx_from_rf, 1);
+        assert_eq!(state.igate_stats.gated_to_aprsis, 1);
+        assert_eq!(state.igate_stats.unique_stations_gated, 1);
+        assert_eq!(state.igate_stats.dropped_total, 0);
+    }
+
+    #[test]
+    fn test_record_igate_drops() {
+        let mut state = DashboardState::new("TEST", vec![]);
+        state.record_igate_result("A", &GateResult::DroppedQuery);
+        state.record_igate_result("B", &GateResult::DroppedForbiddenSource);
+        state.record_igate_result("C", &GateResult::DroppedForbiddenDest);
+        state.record_igate_result("D", &GateResult::DroppedForbiddenVia);
+        state.record_igate_result("E", &GateResult::DroppedDepthExceeded);
+
+        assert_eq!(state.igate_stats.rx_from_rf, 5);
+        assert_eq!(state.igate_stats.gated_to_aprsis, 0);
+        assert_eq!(state.igate_stats.dropped_total, 5);
+        assert_eq!(state.igate_stats.dropped_query, 1);
+        assert_eq!(state.igate_stats.dropped_forbidden_source, 1);
+        assert_eq!(state.igate_stats.dropped_forbidden_dest, 1);
+        assert_eq!(state.igate_stats.dropped_forbidden_via, 1);
+        assert_eq!(state.igate_stats.dropped_depth_exceeded, 1);
+    }
+
+    #[test]
+    fn test_record_igate_unique_stations() {
+        let mut state = DashboardState::new("TEST", vec![]);
+        let result = GateResult::Gated("line".to_string());
+        state.record_igate_result("OH2MQK", &result);
+        state.record_igate_result("oh2mqk", &result); // same station, different case
+        state.record_igate_result("KB1ABC", &result);
+
+        assert_eq!(state.igate_stats.gated_to_aprsis, 3);
+        assert_eq!(state.igate_stats.unique_stations_gated, 2);
+    }
+
+    #[test]
+    fn test_igate_stats_in_json() {
+        let mut state = DashboardState::new("TEST", vec![]);
+        let result = GateResult::Gated("line".to_string());
+        state.record_igate_result("OH2MQK", &result);
+        state.record_igate_result("X", &GateResult::DroppedQuery);
+
+        let json = state.to_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let ig = &parsed["igate_stats"];
+        assert_eq!(ig["rx_from_rf"], 2);
+        assert_eq!(ig["gated_to_aprsis"], 1);
+        assert_eq!(ig["dropped_total"], 1);
+        assert_eq!(ig["dropped_query"], 1);
+        assert_eq!(ig["unique_stations_gated"], 1);
     }
 
     #[test]

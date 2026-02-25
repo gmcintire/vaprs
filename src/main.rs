@@ -135,8 +135,8 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     // Set up the interface registry
     let mut registry = InterfaceRegistry::new();
 
-    // Set up Erlang monitor
-    let mut erlang_monitor = vaprs::erlang::ErlangMonitor::new();
+    // Set up Erlang monitor (shared so consumer tasks can record rx/tx)
+    let erlang_monitor = Arc::new(Mutex::new(vaprs::erlang::ErlangMonitor::new()));
 
     // Collect interface names for dashboard
     let iface_names: Vec<String> = config
@@ -178,7 +178,7 @@ async fn async_main(config: Config, erlang_enabled: bool) {
             .unwrap_or(&config.mycall)
             .to_string();
         let iface_name = format!("{}_{}", callsign, idx);
-        erlang_monitor.add_channel(&iface_name);
+        erlang_monitor.lock().unwrap().add_channel(&iface_name);
 
         match iface_cfg.iface_type {
             InterfaceType::Serial => {
@@ -273,7 +273,7 @@ async fn async_main(config: Config, erlang_enabled: bool) {
         let client = AprsIsClient::new(&config.mycall, aprsis_cfg);
         let aprsis_packet_tx = packet_tx.clone();
         let aprsis_dashboard = dashboard_state.clone();
-        erlang_monitor.add_channel("APRSIS");
+        erlang_monitor.lock().unwrap().add_channel("APRSIS");
         let handle = tokio::spawn(async move {
             client
                 .run(aprsis_packet_tx, aprsis_write_rx, aprsis_dashboard)
@@ -298,14 +298,34 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     // Spawn the Rx-iGate consumer task
     let gate_call = config.mycall.clone();
     let igate_aprsis_tx = aprsis_write_tx.clone();
+    let igate_dashboard = dashboard_state.clone();
+    let igate_erlang = erlang_monitor.clone();
     let igate_handle = tokio::spawn(async move {
         while let Some(packet) = igate_rx.recv().await {
+            // Record erlang rx for the source interface
+            if let Some(ch) = igate_erlang
+                .lock()
+                .unwrap()
+                .get_mut(&packet.source_interface)
+            {
+                ch.record_rx(packet.tnc2.len() as u64);
+            }
+
             // Only gate packets from RF interfaces (not from APRS-IS)
             if packet.source_interface == "APRSIS" {
                 continue;
             }
 
-            if let Some(gated_line) = igate::gate_to_aprsis(&packet, &gate_call) {
+            let result = igate::gate_to_aprsis(&packet, &gate_call);
+
+            // Record stats into dashboard state
+            if let Some(ref ds) = igate_dashboard {
+                ds.lock()
+                    .unwrap()
+                    .record_igate_result(packet.source_call(), &result);
+            }
+
+            if let igate::GateResult::Gated(gated_line) = result {
                 if igate_aprsis_tx.send(gated_line).await.is_err() {
                     break;
                 }
@@ -370,6 +390,7 @@ async fn async_main(config: Config, erlang_enabled: bool) {
 
     // Spawn Erlang rotation timer (if enabled)
     let erlang_dashboard = dashboard_state.clone();
+    let erlang_timer_monitor = erlang_monitor.clone();
     let erlang_handle = if erlang_enabled {
         Some(tokio::spawn(async move {
             let mut rotate_interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -377,18 +398,17 @@ async fn async_main(config: Config, erlang_enabled: bool) {
             loop {
                 tokio::select! {
                     _ = rotate_interval.tick() => {
-                        erlang_monitor.rotate_all();
+                        erlang_timer_monitor.lock().unwrap().rotate_all();
                     }
                     _ = snapshot_interval.tick() => {}
                 }
                 if let Some(ref ds) = erlang_dashboard {
-                    let snapshot = erlang_monitor.snapshot();
+                    let snapshot = erlang_timer_monitor.lock().unwrap().snapshot();
                     ds.lock().unwrap().erlang_stats = snapshot;
                 }
             }
         }))
     } else {
-        drop(erlang_monitor);
         None
     };
 

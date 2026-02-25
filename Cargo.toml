@@ -1,6 +1,6 @@
 [package]
 name = "vaprs"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2021"
 description = "APRS iGate and digipeater"
 license = "GPL-2.0-or-later"

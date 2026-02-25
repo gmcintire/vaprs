@@ -7,6 +7,23 @@
 use crate::history::HistoryDb;
 use crate::packet::Packet;
 
+/// Result of attempting to gate a packet to APRS-IS.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GateResult {
+    /// Packet was successfully gated; contains the formatted APRS-IS line.
+    Gated(String),
+    /// Dropped: payload is a query packet (starts with '?').
+    DroppedQuery,
+    /// Dropped: source callsign has a forbidden prefix.
+    DroppedForbiddenSource,
+    /// Dropped: destination callsign has a forbidden prefix.
+    DroppedForbiddenDest,
+    /// Dropped: a via callsign has a forbidden prefix.
+    DroppedForbiddenVia,
+    /// Dropped: third-party frame nesting exceeds maximum depth.
+    DroppedDepthExceeded,
+}
+
 /// Prefixes that are forbidden in the source callsign field.
 const FORBIDDEN_SOURCE_PREFIXES: &[&str] = &[
     "WIDE", "RELAY", "TRACE", "TCPIP", "TCPXX", "NOCALL", "N0CALL",
@@ -84,27 +101,27 @@ fn extract_via_callsigns(addresses: &str) -> Vec<&str> {
 
 /// Check if a packet should be gated to APRS-IS.
 ///
-/// Returns `Some(formatted_line)` if the packet should be forwarded,
-/// `None` if it should be discarded.
+/// Returns `GateResult::Gated(formatted_line)` if the packet should be forwarded,
+/// or a `GateResult::Dropped*` variant indicating why it was rejected.
 ///
 /// The formatted line has the q-construct appended:
 /// `SOURCE>DEST,VIA1,VIA2,qAR,GATECALL:payload`
-pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> Option<String> {
+pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> GateResult {
     gate_to_aprsis_inner(packet, gate_call, 0)
 }
 
-fn gate_to_aprsis_inner(packet: &Packet, gate_call: &str, depth: u8) -> Option<String> {
+fn gate_to_aprsis_inner(packet: &Packet, gate_call: &str, depth: u8) -> GateResult {
     let payload = packet.payload();
 
     // Drop APRS query packets (payload starts with '?')
     if payload.starts_with('?') {
-        return None;
+        return GateResult::DroppedQuery;
     }
 
     // Handle 3rd-party frames: payload starts with '}'
     if let Some(inner) = payload.strip_prefix('}') {
         if depth >= MAX_THIRD_PARTY_DEPTH {
-            return None;
+            return GateResult::DroppedDepthExceeded;
         }
         let inner_packet = Packet::new(inner, &packet.source_interface, packet.is_aprs);
         return gate_to_aprsis_inner(&inner_packet, gate_call, depth + 1);
@@ -112,26 +129,26 @@ fn gate_to_aprsis_inner(packet: &Packet, gate_call: &str, depth: u8) -> Option<S
 
     // Check forbidden source
     if is_forbidden_source(packet.source_call()) {
-        return None;
+        return GateResult::DroppedForbiddenSource;
     }
 
     // Check forbidden destination
     if is_forbidden_destination(packet.dest_call()) {
-        return None;
+        return GateResult::DroppedForbiddenDest;
     }
 
     // Check forbidden via callsigns
     let via_calls = extract_via_callsigns(packet.addresses());
     for via in &via_calls {
         if is_forbidden_via(via) {
-            return None;
+            return GateResult::DroppedForbiddenVia;
         }
     }
 
     // Build the gated packet with q-construct
     let addresses = sanitize_line(packet.addresses());
     let payload = sanitize_line(payload);
-    Some(format!("{},qAR,{}:{}", addresses, gate_call, payload))
+    GateResult::Gated(format!("{},qAR,{}:{}", addresses, gate_call, payload))
 }
 
 /// Additional forbidden prefixes for Tx-iGate via checking.
@@ -247,68 +264,104 @@ mod tests {
 
     #[test]
     fn test_forbidden_source_wide() {
-        assert!(gate_to_aprsis(&pkt("WIDE1-1>APRS:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("WIDE1-1>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     #[test]
     fn test_forbidden_source_relay() {
-        assert!(gate_to_aprsis(&pkt("RELAY>APRS:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("RELAY>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     #[test]
     fn test_forbidden_source_tcpip() {
-        assert!(gate_to_aprsis(&pkt("TCPIP>APRS:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TCPIP>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     #[test]
     fn test_forbidden_source_nocall() {
-        assert!(gate_to_aprsis(&pkt("NOCALL>APRS:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("NOCALL>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     #[test]
     fn test_forbidden_source_n0call() {
-        assert!(gate_to_aprsis(&pkt("N0CALL>APRS:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("N0CALL>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     // --- Forbidden destination tests ---
 
     #[test]
     fn test_forbidden_dest_tcpip() {
-        assert!(gate_to_aprsis(&pkt("TEST>TCPIP:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>TCPIP:data"), "GATE"),
+            GateResult::DroppedForbiddenDest
+        );
     }
 
     #[test]
     fn test_forbidden_dest_nogate() {
-        assert!(gate_to_aprsis(&pkt("TEST>NOGATE:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>NOGATE:data"), "GATE"),
+            GateResult::DroppedForbiddenDest
+        );
     }
 
     #[test]
     fn test_forbidden_dest_rfonly() {
-        assert!(gate_to_aprsis(&pkt("TEST>RFONLY:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>RFONLY:data"), "GATE"),
+            GateResult::DroppedForbiddenDest
+        );
     }
 
     // --- Forbidden via tests ---
 
     #[test]
     fn test_forbidden_via_rfonly() {
-        assert!(gate_to_aprsis(&pkt("TEST>APRS,RFONLY:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS,RFONLY:data"), "GATE"),
+            GateResult::DroppedForbiddenVia
+        );
     }
 
     #[test]
     fn test_forbidden_via_nogate() {
-        assert!(gate_to_aprsis(&pkt("TEST>APRS,NOGATE:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS,NOGATE:data"), "GATE"),
+            GateResult::DroppedForbiddenVia
+        );
     }
 
     #[test]
     fn test_forbidden_via_tcpip() {
-        assert!(gate_to_aprsis(&pkt("TEST>APRS,TCPIP:data"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS,TCPIP:data"), "GATE"),
+            GateResult::DroppedForbiddenVia
+        );
     }
 
     // --- Query packet rejection ---
 
     #[test]
     fn test_query_packet_rejected() {
-        assert!(gate_to_aprsis(&pkt("TEST>APRS:?APRS?"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS:?APRS?"), "GATE"),
+            GateResult::DroppedQuery
+        );
     }
 
     // --- Valid packet gating ---
@@ -316,10 +369,13 @@ mod tests {
     #[test]
     fn test_valid_packet_gated() {
         let result = gate_to_aprsis(&pkt("OH2MQK-1>APRS,WIDE1-1*:!6029.50N/02505.43E>"), "GATE");
-        assert!(result.is_some());
-        let line = result.unwrap();
-        assert!(line.contains("qAR,GATE"));
-        assert!(line.contains("!6029.50N/02505.43E>"));
+        match result {
+            GateResult::Gated(line) => {
+                assert!(line.contains("qAR,GATE"));
+                assert!(line.contains("!6029.50N/02505.43E>"));
+            }
+            other => panic!("expected Gated, got {:?}", other),
+        }
     }
 
     #[test]
@@ -328,11 +384,15 @@ mod tests {
             &pkt("OH2MQK-1>APRS,WIDE1-1*:!6029.50N/02505.43E>"),
             "MYCALL",
         );
-        let line = result.unwrap();
-        assert_eq!(
-            line,
-            "OH2MQK-1>APRS,WIDE1-1*,qAR,MYCALL:!6029.50N/02505.43E>"
-        );
+        match result {
+            GateResult::Gated(line) => {
+                assert_eq!(
+                    line,
+                    "OH2MQK-1>APRS,WIDE1-1*,qAR,MYCALL:!6029.50N/02505.43E>"
+                );
+            }
+            other => panic!("expected Gated, got {:?}", other),
+        }
     }
 
     // --- Third-party frame handling ---
@@ -341,17 +401,22 @@ mod tests {
     fn test_third_party_frame() {
         // Outer frame wraps an inner valid packet
         let result = gate_to_aprsis(&pkt("OH2MQK>APRS:}TEST>APRS:valid"), "GATE");
-        assert!(result.is_some());
-        let line = result.unwrap();
-        // The inner frame is what gets gated
-        assert_eq!(line, "TEST>APRS,qAR,GATE:valid");
+        match result {
+            GateResult::Gated(line) => {
+                // The inner frame is what gets gated
+                assert_eq!(line, "TEST>APRS,qAR,GATE:valid");
+            }
+            other => panic!("expected Gated, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_third_party_with_forbidden() {
         // Inner frame has forbidden source - should be rejected
-        let result = gate_to_aprsis(&pkt("OH2MQK>APRS:}NOCALL>APRS:data"), "GATE");
-        assert!(result.is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("OH2MQK>APRS:}NOCALL>APRS:data"), "GATE"),
+            GateResult::DroppedForbiddenSource
+        );
     }
 
     // --- Helper function tests ---
@@ -378,9 +443,10 @@ mod tests {
     #[test]
     fn test_empty_via_list() {
         // Packet with no via entries should pass
-        let result = gate_to_aprsis(&pkt("OH2MQK>APRS:data"), "GATE");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), "OH2MQK>APRS,qAR,GATE:data");
+        assert_eq!(
+            gate_to_aprsis(&pkt("OH2MQK>APRS:data"), "GATE"),
+            GateResult::Gated("OH2MQK>APRS,qAR,GATE:data".to_string())
+        );
     }
 
     // --- Additional edge case tests ---
@@ -452,21 +518,28 @@ mod tests {
     #[test]
     fn test_multiple_via_with_one_forbidden() {
         // Second via is NOGATE - should reject
-        let result = gate_to_aprsis(&pkt("TEST>APRS,WIDE1-1,NOGATE:data"), "GATE");
-        assert!(result.is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS,WIDE1-1,NOGATE:data"), "GATE"),
+            GateResult::DroppedForbiddenVia
+        );
     }
 
     #[test]
     fn test_query_with_different_query() {
         // Any payload starting with '?' is a query
-        assert!(gate_to_aprsis(&pkt("TEST>APRS:?WX?"), "GATE").is_none());
+        assert_eq!(
+            gate_to_aprsis(&pkt("TEST>APRS:?WX?"), "GATE"),
+            GateResult::DroppedQuery
+        );
     }
 
     #[test]
     fn test_payload_starting_with_normal_char() {
         // Payload starting with '!' (position report) should pass
-        let result = gate_to_aprsis(&pkt("TEST>APRS:!4903.50N/07201.75W-"), "GATE");
-        assert!(result.is_some());
+        assert!(matches!(
+            gate_to_aprsis(&pkt("TEST>APRS:!4903.50N/07201.75W-"), "GATE"),
+            GateResult::Gated(_)
+        ));
     }
 
     // --- Tx-iGate (gate_to_rf) tests ---
@@ -628,11 +701,15 @@ mod tests {
     #[test]
     fn test_gate_to_aprsis_crlf_in_payload() {
         let p = pkt("TEST>APRS:data\r\nINJECTED>APRS:evil");
-        let result = gate_to_aprsis(&p, "GATE").unwrap();
-        assert!(!result.contains('\r'));
-        assert!(!result.contains('\n'));
-        assert!(result.contains("data"));
-        assert!(!result.contains("INJECTED"));
+        match gate_to_aprsis(&p, "GATE") {
+            GateResult::Gated(line) => {
+                assert!(!line.contains('\r'));
+                assert!(!line.contains('\n'));
+                assert!(line.contains("data"));
+                assert!(!line.contains("INJECTED"));
+            }
+            other => panic!("expected Gated, got {:?}", other),
+        }
     }
 
     #[test]
@@ -656,9 +733,9 @@ mod tests {
             nested = format!("L{}>APRS:}}{}", i, nested);
         }
         let p = pkt(&nested);
-        let result = gate_to_aprsis(&p, "GATE");
-        assert!(
-            result.is_none(),
+        assert_eq!(
+            gate_to_aprsis(&p, "GATE"),
+            GateResult::DroppedDepthExceeded,
             "deeply nested third-party frames should be rejected"
         );
     }
@@ -668,15 +745,20 @@ mod tests {
         // Exactly 3 levels of nesting should still work
         // }}}TEST>APRS:data  (3 unwraps)
         let p = pkt("L1>APRS:}L2>APRS:}L3>APRS:}TEST>APRS:data");
-        let result = gate_to_aprsis(&p, "GATE");
-        assert!(result.is_some(), "3 levels of nesting should be allowed");
+        assert!(
+            matches!(gate_to_aprsis(&p, "GATE"), GateResult::Gated(_)),
+            "3 levels of nesting should be allowed"
+        );
     }
 
     #[test]
     fn test_third_party_frame_exceeds_max_depth() {
         // 4 levels of nesting should be rejected
         let p = pkt("L1>APRS:}L2>APRS:}L3>APRS:}L4>APRS:}TEST>APRS:data");
-        let result = gate_to_aprsis(&p, "GATE");
-        assert!(result.is_none(), "4 levels of nesting should be rejected");
+        assert_eq!(
+            gate_to_aprsis(&p, "GATE"),
+            GateResult::DroppedDepthExceeded,
+            "4 levels of nesting should be rejected"
+        );
     }
 }
