@@ -354,7 +354,7 @@ async fn handle_sse(
                 return;
             }
             _ = poll_interval.tick() => {
-                // Check for new packets
+                // Clone new packets under lock, serialize outside
                 let new_packets = {
                     let s = state.lock().unwrap();
                     if s.packet_sequence > last_sequence {
@@ -367,10 +367,10 @@ async fn handle_sse(
                     } else {
                         Vec::new()
                     }
-                };
+                }; // lock released before serialization
 
-                for pkt in new_packets {
-                    let json = serde_json::to_string(&pkt).unwrap_or_default();
+                for pkt in &new_packets {
+                    let json = serde_json::to_string(pkt).unwrap_or_default();
                     if send_sse_event(&mut writer, "packet", &json).await.is_err() {
                         sse_count.fetch_sub(1, Ordering::Relaxed);
                         return;
@@ -378,8 +378,9 @@ async fn handle_sse(
                 }
             }
             _ = state_interval.tick() => {
-                // Send full state update
-                let json = state.lock().unwrap().to_json();
+                // Build JSON under lock (to_json already returns an owned String)
+                let json = { state.lock().unwrap().to_json() };
+                // Lock released — send over the wire without holding it
                 if send_sse_event(&mut writer, "state", &json).await.is_err() {
                     sse_count.fetch_sub(1, Ordering::Relaxed);
                     return;

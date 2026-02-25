@@ -1,6 +1,6 @@
 pub mod server;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -57,7 +57,7 @@ pub struct DashboardState {
     pub erlang_stats: Vec<ErlangChannelSnapshot>,
     pub aprsis_connected: bool,
     pub aprsis_server: String,
-    pub recent_packets: Vec<PacketSnapshot>,
+    pub recent_packets: VecDeque<PacketSnapshot>,
     pub packet_sequence: u64,
     pub stations: HashMap<String, StationEntry>,
     pub igate_stats: IgateStats,
@@ -85,7 +85,7 @@ impl DashboardState {
             erlang_stats: Vec::new(),
             aprsis_connected: false,
             aprsis_server: String::new(),
-            recent_packets: Vec::new(),
+            recent_packets: VecDeque::new(),
             packet_sequence: 0,
             stations: HashMap::new(),
             igate_stats: IgateStats::default(),
@@ -98,9 +98,9 @@ impl DashboardState {
         self.packet_sequence += 1;
         snapshot.sequence = self.packet_sequence;
         if self.recent_packets.len() >= MAX_RECENT_PACKETS {
-            self.recent_packets.remove(0);
+            self.recent_packets.pop_front();
         }
-        self.recent_packets.push(snapshot);
+        self.recent_packets.push_back(snapshot);
     }
 
     /// Record a station heard on an interface.
@@ -233,7 +233,7 @@ struct DashboardJson<'a> {
     erlang_stats: &'a [ErlangChannelSnapshot],
     aprsis_connected: bool,
     aprsis_server: &'a str,
-    recent_packets: &'a [PacketSnapshot],
+    recent_packets: &'a VecDeque<PacketSnapshot>,
     packet_sequence: u64,
     stations: Vec<StationSnapshot>,
     stations_heard: usize,

@@ -6,11 +6,13 @@
 // is rotated into history, and rolling 10-minute and 60-minute summaries
 // are recomputed from the stored minute samples.
 
-use serde::Serialize;
+use std::collections::VecDeque;
 use std::time::Instant;
 
+use serde::Serialize;
+
 /// Statistics for a single time window.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct WindowStats {
     pub rx_packets: u64,
     pub tx_packets: u64,
@@ -45,7 +47,7 @@ pub struct ChannelStats {
     /// Accumulated stats for the last 60 minutes.
     pub last_60min: WindowStats,
     /// Ring buffer of minute samples for computing rolling windows.
-    minute_samples: Vec<WindowStats>,
+    minute_samples: VecDeque<WindowStats>,
     /// When the last rotation occurred.
     last_rotation: Instant,
 }
@@ -58,7 +60,7 @@ impl ChannelStats {
             last_1min: WindowStats::default(),
             last_10min: WindowStats::default(),
             last_60min: WindowStats::default(),
-            minute_samples: Vec::new(),
+            minute_samples: VecDeque::new(),
             last_rotation: Instant::now(),
         }
     }
@@ -92,18 +94,20 @@ impl ChannelStats {
     /// summaries, and resets the current window to zero.
     pub fn rotate(&mut self) {
         // Move current into last_1min
-        self.last_1min = self.current.clone();
+        self.last_1min = self.current;
 
         // Push to ring buffer (keep at most 60 samples)
-        self.minute_samples.push(self.current.clone());
+        self.minute_samples.push_back(self.current);
         if self.minute_samples.len() > 60 {
-            self.minute_samples.remove(0);
+            self.minute_samples.pop_front();
         }
 
         // Recompute last_10min from the most recent 10 samples
         let ten_start = self.minute_samples.len().saturating_sub(10);
-        self.last_10min = self.minute_samples[ten_start..]
+        self.last_10min = self
+            .minute_samples
             .iter()
+            .skip(ten_start)
             .fold(WindowStats::default(), |acc, s| acc.add(s));
 
         // Recompute last_60min from all samples (up to 60)
@@ -163,10 +167,10 @@ impl ErlangMonitor {
             .iter()
             .map(|ch| ErlangChannelSnapshot {
                 name: ch.name.clone(),
-                current: ch.current.clone(),
-                last_1min: ch.last_1min.clone(),
-                last_10min: ch.last_10min.clone(),
-                last_60min: ch.last_60min.clone(),
+                current: ch.current,
+                last_1min: ch.last_1min,
+                last_10min: ch.last_10min,
+                last_60min: ch.last_60min,
             })
             .collect()
     }
