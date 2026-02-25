@@ -66,6 +66,13 @@ header {
   letter-spacing: -0.03em;
 }
 
+.version {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
 .mycall {
   font-family: var(--mono);
   font-weight: 600;

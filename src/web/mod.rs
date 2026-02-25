@@ -140,6 +140,7 @@ impl DashboardState {
         });
 
         let state = DashboardJson {
+            version: env!("CARGO_PKG_VERSION"),
             mycall: &self.mycall,
             uptime_secs,
             timestamp: now_epoch,
@@ -161,6 +162,7 @@ impl DashboardState {
 
 #[derive(Serialize)]
 struct DashboardJson<'a> {
+    version: &'a str,
     mycall: &'a str,
     uptime_secs: u64,
     timestamp: u64,
@@ -263,6 +265,7 @@ mod tests {
         let json = state.to_json();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["mycall"], "OH2MQK-1");
+        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(parsed["aprsis_connected"], true);
         assert_eq!(parsed["aprsis_server"], "rotate.aprs2.net:14580");
         assert!(parsed["uptime_secs"].as_u64().is_some());

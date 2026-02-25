@@ -13,6 +13,7 @@
   // ── DOM refs ──
   var el = {
     mycall:     document.getElementById('mycall'),
+    version:    document.getElementById('version'),
     uptime:     document.getElementById('uptime'),
     clock:      document.getElementById('clock'),
     aprsisInd:  document.getElementById('aprsis-indicator'),
@@ -74,6 +75,7 @@
     state = s;
 
     el.mycall.textContent = s.mycall;
+    el.version.textContent = s.version ? 'v' + s.version : '';
     document.title = 'vaprs \u2014 ' + s.mycall;
     el.uptime.textContent = 'Up: ' + formatUptime(s.uptime_secs);
 
