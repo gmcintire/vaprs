@@ -272,9 +272,12 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     let aprsis_handle = if let Some(ref aprsis_cfg) = config.aprsis {
         let client = AprsIsClient::new(&config.mycall, aprsis_cfg);
         let aprsis_packet_tx = packet_tx.clone();
+        let aprsis_dashboard = dashboard_state.clone();
         erlang_monitor.add_channel("APRSIS");
         let handle = tokio::spawn(async move {
-            client.run(aprsis_packet_tx, aprsis_write_rx).await;
+            client
+                .run(aprsis_packet_tx, aprsis_write_rx, aprsis_dashboard)
+                .await;
         });
         info!("APRS-IS client spawned");
         Some(handle)

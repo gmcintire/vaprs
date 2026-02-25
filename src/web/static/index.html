@@ -45,7 +45,14 @@
   <div class="section">
     <div class="section-header">
       <span>Live Packet Feed</span>
-      <button id="pause-btn" class="btn-pause" title="Pause feed">&#9646;&#9646;</button>
+      <div class="feed-controls">
+        <div id="source-filter" class="source-filter">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="rf">RF Only</button>
+          <button class="filter-btn" data-filter="aprsis">APRS-IS Only</button>
+        </div>
+        <button id="pause-btn" class="btn-pause" title="Pause feed">&#9646;&#9646;</button>
+      </div>
     </div>
     <div id="packet-feed" class="packet-feed"></div>
   </div>

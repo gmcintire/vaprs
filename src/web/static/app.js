@@ -8,6 +8,7 @@
   var state = null;
   var evtSource = null;
   var clockTimer = null;
+  var sourceFilter = 'all'; // 'all', 'rf', 'aprsis'
 
   // ── DOM refs ──
   var el = {
@@ -146,6 +147,12 @@
 
   // ── Packet feed ──
 
+  function matchesFilter(pkt) {
+    if (sourceFilter === 'all') return true;
+    if (sourceFilter === 'aprsis') return pkt.interface === 'APRSIS';
+    return pkt.interface !== 'APRSIS'; // rf
+  }
+
   function makePacketHtml(pkt) {
     var cls = pkt.interface === 'APRSIS' ? 'from-aprsis' : 'from-rf';
     return '<div class="packet-line ' + cls + '">' +
@@ -163,7 +170,13 @@
     }
     var html = '';
     for (var i = 0; i < packets.length; i++) {
-      html += makePacketHtml(packets[i]);
+      if (matchesFilter(packets[i])) {
+        html += makePacketHtml(packets[i]);
+      }
+    }
+    if (html === '') {
+      el.packetFeed.innerHTML = '<div class="packet-feed-empty">No packets match filter</div>';
+      return;
     }
     el.packetFeed.innerHTML = html;
     if (autoScroll && !paused) {
@@ -173,6 +186,7 @@
 
   function appendPacket(pkt) {
     if (paused) return;
+    if (!matchesFilter(pkt)) return;
 
     // Remove empty placeholder if present
     var empty = el.packetFeed.querySelector('.packet-feed-empty');
@@ -204,6 +218,23 @@
       autoScroll = true;
     }
   });
+
+  // ── Source filter ──
+
+  var filterBtns = document.querySelectorAll('.filter-btn');
+  for (var i = 0; i < filterBtns.length; i++) {
+    filterBtns[i].addEventListener('click', function () {
+      sourceFilter = this.getAttribute('data-filter');
+      for (var j = 0; j < filterBtns.length; j++) {
+        filterBtns[j].classList.remove('active');
+      }
+      this.classList.add('active');
+      // Re-render with current state
+      if (state && state.recent_packets) {
+        renderPacketFeed(state.recent_packets);
+      }
+    });
+  }
 
   el.packetFeed.addEventListener('scroll', function () {
     var feed = el.packetFeed;

@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::AprsIsConfig;
 use crate::packet::{Packet, SharedPacket};
+use crate::web::SharedDashboardState;
 
 /// Default heartbeat timeout in seconds. APRS-IS servers send keepalives
 /// roughly every 20-30 seconds; 120s gives plenty of margin.
@@ -104,6 +105,7 @@ impl AprsIsClient {
         self,
         packet_tx: mpsc::Sender<SharedPacket>,
         mut write_rx: mpsc::Receiver<String>,
+        dashboard_state: Option<SharedDashboardState>,
     ) {
         if self.servers.is_empty() {
             error!("APRS-IS: no servers configured");
@@ -118,7 +120,13 @@ impl AprsIsClient {
             info!("APRS-IS: connecting to {}", server);
 
             match self
-                .connect_and_run(server, &packet_tx, &mut write_rx, &mut pending_writes)
+                .connect_and_run(
+                    server,
+                    &packet_tx,
+                    &mut write_rx,
+                    &mut pending_writes,
+                    &dashboard_state,
+                )
                 .await
             {
                 ConnectionResult::Shutdown => {
@@ -127,6 +135,10 @@ impl AprsIsClient {
                 }
                 ConnectionResult::Disconnected(reason) => {
                     warn!("APRS-IS: disconnected from {}: {}", server, reason);
+                    if let Some(ref ds) = dashboard_state {
+                        let mut state = ds.lock().unwrap();
+                        state.aprsis_connected = false;
+                    }
                     // Rotate to next server on failure
                     server_idx = (server_idx + 1) % self.servers.len();
                 }
@@ -169,6 +181,7 @@ impl AprsIsClient {
         packet_tx: &mpsc::Sender<SharedPacket>,
         write_rx: &mut mpsc::Receiver<String>,
         pending_writes: &mut Vec<String>,
+        dashboard_state: &Option<SharedDashboardState>,
     ) -> ConnectionResult {
         // TCP connect with timeout
         let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(server)).await {
@@ -182,6 +195,12 @@ impl AprsIsClient {
         };
 
         info!("APRS-IS: connected to {}", server);
+
+        if let Some(ref ds) = dashboard_state {
+            let mut state = ds.lock().unwrap();
+            state.aprsis_connected = true;
+            state.aprsis_server = server.to_string();
+        }
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -559,7 +578,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Receive the two packets
@@ -632,7 +651,7 @@ mod tests {
         let (_write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Should only receive the one real packet, not comments
@@ -687,7 +706,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Give the client a moment to connect and send login
@@ -758,7 +777,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Wait long enough for the heartbeat timeout (1s) + reconnect backoff (10s)
@@ -794,9 +813,12 @@ mod tests {
         let (_write_tx, write_rx) = mpsc::channel::<String>(32);
 
         // Should return immediately with no servers
-        tokio::time::timeout(Duration::from_secs(2), client.run(packet_tx, write_rx))
-            .await
-            .expect("should return immediately with no servers");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.run(packet_tx, write_rx, None),
+        )
+        .await
+        .expect("should return immediately with no servers");
     }
 
     #[tokio::test]
@@ -835,7 +857,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Wait for connection to establish
@@ -902,7 +924,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Should receive the packet from the second connection (after reconnect)
@@ -966,7 +988,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Should eventually connect to server 2 and get the packet
@@ -1019,7 +1041,7 @@ mod tests {
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1097,7 +1119,7 @@ mod tests {
         drop(packet_rx);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Client should detect that packet_tx sends fail and shut down
@@ -1152,7 +1174,7 @@ mod tests {
         let client = AprsIsClient::new("N0CALL", &config);
 
         let client_task = tokio::spawn(async move {
-            client.run(packet_tx, write_rx).await;
+            client.run(packet_tx, write_rx, None).await;
         });
 
         // Don't read from packet_rx immediately - let the channel fill up.
@@ -1217,5 +1239,344 @@ mod tests {
         };
         let client = AprsIsClient::new("TEST", &config);
         assert_eq!(client.servers.len(), 2);
+    }
+
+    // ---- Dashboard state integration tests ----
+
+    use crate::web::DashboardState;
+    use std::sync::Mutex;
+
+    fn make_dashboard_state() -> SharedDashboardState {
+        Arc::new(Mutex::new(DashboardState::new("TEST", vec![])))
+    }
+
+    #[tokio::test]
+    async fn run_updates_dashboard_on_connect() {
+        let (listener, addr) = mock_server().await;
+        let dashboard = make_dashboard_state();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader_half, mut writer) = stream.into_split();
+
+            writer.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+
+            let mut reader = BufReader::new(reader_half);
+            let mut login = String::new();
+            reader.read_line(&mut login).await.unwrap();
+
+            writer
+                .write_all(b"# logresp N0CALL verified\r\n")
+                .await
+                .unwrap();
+            writer
+                .write_all(b"TEST>APRS:dashboard test\r\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+
+            // Keep connection alive until client disconnects
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+
+        let config = AprsIsConfig {
+            passcode: -1,
+            servers: vec![addr.clone()],
+            filter: None,
+            heartbeat_timeout: Some(30),
+        };
+        let client = AprsIsClient::new("N0CALL", &config);
+
+        let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
+        let (write_tx, write_rx) = mpsc::channel::<String>(32);
+        let ds = Some(dashboard.clone());
+
+        let client_task = tokio::spawn(async move {
+            client.run(packet_tx, write_rx, ds).await;
+        });
+
+        // Wait for a packet to confirm connection was established
+        let _pkt = tokio::time::timeout(Duration::from_secs(5), packet_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Dashboard should show connected (server stays alive)
+        {
+            let state = dashboard.lock().unwrap();
+            assert!(state.aprsis_connected, "dashboard should show connected");
+            assert_eq!(state.aprsis_server, addr);
+        }
+
+        drop(write_tx);
+
+        tokio::time::timeout(Duration::from_secs(10), client_task)
+            .await
+            .expect("client task timeout")
+            .expect("client task panicked");
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_updates_dashboard_on_disconnect() {
+        let (listener, addr) = mock_server().await;
+        let dashboard = make_dashboard_state();
+
+        // Use a notify to signal when the server should close
+        let close_signal = Arc::new(tokio::sync::Notify::new());
+        let close_signal_server = close_signal.clone();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader_half, mut writer) = stream.into_split();
+
+            writer.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+
+            let mut reader = BufReader::new(reader_half);
+            let mut login = String::new();
+            reader.read_line(&mut login).await.unwrap();
+
+            writer
+                .write_all(b"TEST>APRS:before disconnect\r\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+
+            // Wait for signal to close connection
+            close_signal_server.notified().await;
+
+            // Close connection by dropping
+            drop(writer);
+            drop(reader);
+
+            // Accept second connection for shutdown
+            let (stream2, _) = listener.accept().await.unwrap();
+            let (_r2, mut w2) = stream2.into_split();
+            w2.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+
+        let config = AprsIsConfig {
+            passcode: -1,
+            servers: vec![addr],
+            filter: None,
+            heartbeat_timeout: Some(5),
+        };
+        let client = AprsIsClient::new("N0CALL", &config);
+
+        let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
+        let (write_tx, write_rx) = mpsc::channel::<String>(32);
+        let ds = Some(dashboard.clone());
+
+        let client_task = tokio::spawn(async move {
+            client.run(packet_tx, write_rx, ds).await;
+        });
+
+        // Wait for first packet — confirms connected
+        let _pkt = tokio::time::timeout(Duration::from_secs(5), packet_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Confirm connected
+        assert!(
+            dashboard.lock().unwrap().aprsis_connected,
+            "should be connected after receiving packet"
+        );
+
+        // Now tell the server to close the connection
+        close_signal.notify_one();
+
+        // Wait for the client to detect the disconnect.
+        // The client reads EOF, returns Disconnected, and `run()` sets aprsis_connected=false.
+        // We poll by checking the dashboard state.
+        let disconnected = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if !dashboard.lock().unwrap().aprsis_connected {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            disconnected.is_ok(),
+            "dashboard should show disconnected after server close"
+        );
+
+        // Clean shutdown
+        drop(write_tx);
+
+        tokio::time::timeout(Duration::from_secs(15), client_task)
+            .await
+            .expect("client task timeout")
+            .expect("client task panicked");
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_with_dashboard_none_works() {
+        // Ensure passing None for dashboard_state doesn't break anything
+        let (listener, addr) = mock_server().await;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader_half, mut writer) = stream.into_split();
+            writer.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+            let mut reader = BufReader::new(reader_half);
+            let mut login = String::new();
+            reader.read_line(&mut login).await.unwrap();
+            writer
+                .write_all(b"TEST>APRS:no dashboard\r\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            drop(writer);
+            drop(reader);
+        });
+
+        let config = AprsIsConfig {
+            passcode: -1,
+            servers: vec![addr],
+            filter: None,
+            heartbeat_timeout: Some(5),
+        };
+        let client = AprsIsClient::new("N0CALL", &config);
+
+        let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
+        let (write_tx, write_rx) = mpsc::channel::<String>(32);
+
+        let client_task = tokio::spawn(async move {
+            client.run(packet_tx, write_rx, None).await;
+        });
+
+        let pkt = tokio::time::timeout(Duration::from_secs(5), packet_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert_eq!(pkt.tnc2, "TEST>APRS:no dashboard");
+
+        drop(write_tx);
+
+        tokio::time::timeout(Duration::from_secs(10), client_task)
+            .await
+            .expect("client task timeout")
+            .expect("client task panicked");
+
+        server.await.expect("server panicked");
+    }
+
+    #[tokio::test]
+    async fn run_dashboard_reconnect_cycle() {
+        // Verify dashboard state cycles through connected -> disconnected -> connected
+        let (listener, addr) = mock_server().await;
+        let dashboard = make_dashboard_state();
+        let close_signal = Arc::new(tokio::sync::Notify::new());
+        let close_signal_server = close_signal.clone();
+
+        let server = tokio::spawn(async move {
+            // First connection: greet, send packet, wait for close signal
+            {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader_half, mut writer) = stream.into_split();
+                writer.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+                let mut reader = BufReader::new(reader_half);
+                let mut login = String::new();
+                reader.read_line(&mut login).await.unwrap();
+                writer
+                    .write_all(b"FIRST>APRS:first connection\r\n")
+                    .await
+                    .unwrap();
+                writer.flush().await.unwrap();
+
+                // Wait for signal to close
+                close_signal_server.notified().await;
+            }
+
+            // Second connection: greet, send packet, keep alive
+            let (stream2, _) = listener.accept().await.unwrap();
+            let (reader_half2, mut writer2) = stream2.into_split();
+            writer2.write_all(b"# javAPRSSrvr 4.2.0\r\n").await.unwrap();
+            let mut reader2 = BufReader::new(reader_half2);
+            let mut login2 = String::new();
+            reader2.read_line(&mut login2).await.unwrap();
+            writer2
+                .write_all(b"SECOND>APRS:second connection\r\n")
+                .await
+                .unwrap();
+            writer2.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+
+        let config = AprsIsConfig {
+            passcode: -1,
+            servers: vec![addr.clone()],
+            filter: None,
+            heartbeat_timeout: Some(5),
+        };
+        let client = AprsIsClient::new("N0CALL", &config);
+
+        let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
+        let (write_tx, write_rx) = mpsc::channel::<String>(32);
+        let ds = Some(dashboard.clone());
+
+        let client_task = tokio::spawn(async move {
+            client.run(packet_tx, write_rx, ds).await;
+        });
+
+        // First connection: get packet, verify connected
+        let pkt1 = tokio::time::timeout(Duration::from_secs(5), packet_rx.recv())
+            .await
+            .expect("timeout pkt1")
+            .expect("channel closed");
+        assert_eq!(pkt1.tnc2, "FIRST>APRS:first connection");
+        assert!(
+            dashboard.lock().unwrap().aprsis_connected,
+            "should be connected after first packet"
+        );
+        assert_eq!(dashboard.lock().unwrap().aprsis_server, addr);
+
+        // Tell server to close the first connection
+        close_signal.notify_one();
+
+        // Wait for disconnect to be detected
+        let disconnected = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if !dashboard.lock().unwrap().aprsis_connected {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            disconnected.is_ok(),
+            "should show disconnected after server close"
+        );
+
+        // Wait for reconnect to second connection
+        let pkt2 = tokio::time::timeout(Duration::from_secs(20), packet_rx.recv())
+            .await
+            .expect("timeout pkt2")
+            .expect("channel closed");
+        assert_eq!(pkt2.tnc2, "SECOND>APRS:second connection");
+
+        // Should be connected again after reconnect
+        assert!(
+            dashboard.lock().unwrap().aprsis_connected,
+            "should be connected again after reconnect"
+        );
+
+        drop(write_tx);
+
+        tokio::time::timeout(Duration::from_secs(15), client_task)
+            .await
+            .expect("client task timeout")
+            .expect("client task panicked");
+
+        server.abort();
     }
 }
