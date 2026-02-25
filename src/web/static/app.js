@@ -20,6 +20,7 @@
     aprsisStatus: document.getElementById('aprsis-status'),
     aprsisServer: document.getElementById('aprsis-server'),
     ifaceCount: document.getElementById('interface-count'),
+    ifaceNames: document.getElementById('interface-names'),
     stationsHeard: document.getElementById('stations-heard'),
     traffic:    document.getElementById('traffic'),
     packetFeed: document.getElementById('packet-feed'),
@@ -89,8 +90,9 @@
     }
     el.aprsisServer.textContent = s.aprsis_server || '';
 
-    // Interface count
+    // Interface count and names
     el.ifaceCount.textContent = s.interfaces.length + ' active';
+    el.ifaceNames.textContent = s.interfaces.join(', ');
 
     // Stations
     el.stationsHeard.textContent = s.stations_heard + ' heard';
@@ -110,14 +112,16 @@
 
   function renderErlang(stats) {
     if (!stats || stats.length === 0) {
-      el.erlangTbody.innerHTML = '<tr><td colspan="5" class="table-empty">No erlang data yet</td></tr>';
+      el.erlangTbody.innerHTML = '<tr><td colspan="6" class="table-empty">No erlang data yet</td></tr>';
       return;
     }
     var html = '';
     for (var i = 0; i < stats.length; i++) {
       var ch = stats[i];
+      var cur = ch.current || {rx_packets: 0, tx_packets: 0};
       html += '<tr>' +
         '<td class="iface">' + escapeHtml(ch.name) + '</td>' +
+        '<td class="num">' + cur.rx_packets + '/' + cur.tx_packets + '</td>' +
         '<td class="num">' + ch.last_1min.rx_packets + '/' + ch.last_1min.tx_packets + '</td>' +
         '<td class="num">' + ch.last_10min.rx_packets + '/' + ch.last_10min.tx_packets + '</td>' +
         '<td class="num">' + ch.last_60min.rx_packets + '/' + ch.last_60min.tx_packets + '</td>' +

@@ -372,10 +372,15 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     let erlang_dashboard = dashboard_state.clone();
     let erlang_handle = if erlang_enabled {
         Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut rotate_interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut snapshot_interval = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
-                interval.tick().await;
-                erlang_monitor.rotate_all();
+                tokio::select! {
+                    _ = rotate_interval.tick() => {
+                        erlang_monitor.rotate_all();
+                    }
+                    _ = snapshot_interval.tick() => {}
+                }
                 if let Some(ref ds) = erlang_dashboard {
                     let snapshot = erlang_monitor.snapshot();
                     ds.lock().unwrap().erlang_stats = snapshot;

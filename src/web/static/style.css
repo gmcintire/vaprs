@@ -10,7 +10,7 @@
   --border-bright: #b8bcc6;
   --text-primary: #2c3038;
   --text-secondary: #5a6070;
-  --text-dim: #8d93a0;
+  --text-dim: #6b7280;
   --text-bright: #1a1d24;
   --accent-green: #1a9960;
   --accent-green-dim: rgba(26, 153, 96, 0.1);
@@ -68,7 +68,7 @@ header {
 
 .version {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--text-dim);
 }
@@ -211,7 +211,7 @@ header {
 
 .filter-btn {
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 600;
   background: transparent;
   color: var(--text-dim);
@@ -279,7 +279,7 @@ header {
 /* ── Pause Button ──────────────────────────────────────── */
 .btn-pause {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
   background: var(--bg-input);
   color: var(--text-secondary);
@@ -306,7 +306,7 @@ header {
 .data-table thead th {
   text-align: left;
   padding: 8px 16px;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -327,7 +327,7 @@ header {
 .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table .callsign { color: var(--accent-blue); font-weight: 500; }
 .data-table .iface { color: var(--text-dim); }
-.data-table .pos { color: var(--text-dim); font-size: 0.75rem; }
+.data-table .pos { color: var(--text-dim); font-size: 0.8rem; }
 
 .table-empty {
   padding: 20px 16px;

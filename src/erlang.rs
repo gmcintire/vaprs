@@ -163,6 +163,7 @@ impl ErlangMonitor {
             .iter()
             .map(|ch| ErlangChannelSnapshot {
                 name: ch.name.clone(),
+                current: ch.current.clone(),
                 last_1min: ch.last_1min.clone(),
                 last_10min: ch.last_10min.clone(),
                 last_60min: ch.last_60min.clone(),
@@ -175,6 +176,7 @@ impl ErlangMonitor {
 #[derive(Debug, Clone, Serialize)]
 pub struct ErlangChannelSnapshot {
     pub name: String,
+    pub current: WindowStats,
     pub last_1min: WindowStats,
     pub last_10min: WindowStats,
     pub last_60min: WindowStats,

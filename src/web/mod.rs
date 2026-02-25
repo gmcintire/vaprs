@@ -131,12 +131,21 @@ impl DashboardState {
             .collect();
         stations.sort_by_key(|s| s.last_heard_secs_ago);
 
-        // Compute packets per minute from erlang stats
+        // Compute packets per minute from erlang stats.
+        // Use the current (in-progress) window for live counts; fall back to
+        // last_1min if the current window is empty (just after a rotation).
         let (rx_per_min, tx_per_min) = self.erlang_stats.iter().fold((0u64, 0u64), |acc, ch| {
-            (
-                acc.0 + ch.last_1min.rx_packets,
-                acc.1 + ch.last_1min.tx_packets,
-            )
+            let rx = if ch.current.rx_packets > 0 {
+                ch.current.rx_packets
+            } else {
+                ch.last_1min.rx_packets
+            };
+            let tx = if ch.current.tx_packets > 0 {
+                ch.current.tx_packets
+            } else {
+                ch.last_1min.tx_packets
+            };
+            (acc.0 + rx, acc.1 + tx)
         });
 
         let state = DashboardJson {
