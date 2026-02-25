@@ -35,6 +35,13 @@ pub struct StationSnapshot {
     pub position: Option<(f64, f64)>,
 }
 
+/// Interface identity and device detail for the dashboard.
+#[derive(Debug, Clone, Serialize)]
+pub struct InterfaceInfo {
+    pub name: String,
+    pub detail: String,
+}
+
 /// iGate statistics counters for the dashboard.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IgateStats {
@@ -53,7 +60,7 @@ pub struct IgateStats {
 pub struct DashboardState {
     pub mycall: String,
     pub started_at: Instant,
-    pub interfaces: Vec<String>,
+    pub interfaces: Vec<InterfaceInfo>,
     pub erlang_stats: Vec<ErlangChannelSnapshot>,
     pub aprsis_connected: bool,
     pub aprsis_server: String,
@@ -77,7 +84,7 @@ pub struct StationEntry {
 pub type SharedDashboardState = Arc<Mutex<DashboardState>>;
 
 impl DashboardState {
-    pub fn new(mycall: &str, interfaces: Vec<String>) -> Self {
+    pub fn new(mycall: &str, interfaces: Vec<InterfaceInfo>) -> Self {
         Self {
             mycall: mycall.to_string(),
             started_at: Instant::now(),
@@ -229,7 +236,7 @@ struct DashboardJson<'a> {
     mycall: &'a str,
     uptime_secs: u64,
     timestamp: u64,
-    interfaces: &'a [String],
+    interfaces: &'a [InterfaceInfo],
     erlang_stats: &'a [ErlangChannelSnapshot],
     aprsis_connected: bool,
     aprsis_server: &'a str,
@@ -246,11 +253,20 @@ struct DashboardJson<'a> {
 mod tests {
     use super::*;
 
+    fn iface(name: &str, detail: &str) -> InterfaceInfo {
+        InterfaceInfo {
+            name: name.to_string(),
+            detail: detail.to_string(),
+        }
+    }
+
     #[test]
     fn test_dashboard_state_new() {
-        let state = DashboardState::new("OH2MQK-1", vec!["radio0".to_string()]);
+        let state = DashboardState::new("OH2MQK-1", vec![iface("radio0", "/dev/ttyUSB0 @ 9600")]);
         assert_eq!(state.mycall, "OH2MQK-1");
-        assert_eq!(state.interfaces, vec!["radio0"]);
+        assert_eq!(state.interfaces.len(), 1);
+        assert_eq!(state.interfaces[0].name, "radio0");
+        assert_eq!(state.interfaces[0].detail, "/dev/ttyUSB0 @ 9600");
         assert!(!state.aprsis_connected);
         assert!(state.recent_packets.is_empty());
         assert_eq!(state.packet_sequence, 0);
@@ -322,7 +338,8 @@ mod tests {
 
     #[test]
     fn test_to_json_produces_valid_json() {
-        let mut state = DashboardState::new("OH2MQK-1", vec!["radio0".to_string()]);
+        let mut state =
+            DashboardState::new("OH2MQK-1", vec![iface("radio0", "/dev/ttyUSB0 @ 9600")]);
         state.aprsis_connected = true;
         state.aprsis_server = "rotate.aprs2.net:14580".to_string();
 

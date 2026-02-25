@@ -102,7 +102,15 @@
 
     // Interface count and names
     el.ifaceCount.textContent = s.interfaces.length + ' active';
-    el.ifaceNames.textContent = s.interfaces.join(', ');
+    var ifaceHtml = '';
+    for (var i = 0; i < s.interfaces.length; i++) {
+      var ifc = s.interfaces[i];
+      ifaceHtml += '<div class="iface-entry">' +
+        '<strong>' + escapeHtml(ifc.name) + '</strong>' +
+        (ifc.detail ? ' <span class="iface-detail">' + escapeHtml(ifc.detail) + '</span>' : '') +
+        '</div>';
+    }
+    el.ifaceNames.innerHTML = ifaceHtml || '\u2014';
 
     // Stations
     el.stationsHeard.textContent = s.stations_heard + ' heard';

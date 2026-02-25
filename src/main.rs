@@ -114,7 +114,7 @@ fn main() {
             std::process::exit(1);
         });
 
-    rt.block_on(async_main(config, cli.erlang));
+    rt.block_on(async_main(config, cli.erlang, cli.log_aprsis));
 
     // Clean up PID file
     if pid_file_created {
@@ -127,7 +127,7 @@ fn main() {
 }
 
 /// Async entry point - runs all tasks until shutdown signal.
-async fn async_main(config: Config, erlang_enabled: bool) {
+async fn async_main(config: Config, erlang_enabled: bool, log_aprsis: bool) {
     // Create the central packet channel and router
     let (packet_tx, packet_rx) = mpsc::channel::<SharedPacket>(ROUTER_CHANNEL_SIZE);
     let mut router = Router::new(packet_rx);
@@ -138,14 +138,28 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     // Set up Erlang monitor (shared so consumer tasks can record rx/tx)
     let erlang_monitor = Arc::new(Mutex::new(vaprs::erlang::ErlangMonitor::new()));
 
-    // Collect interface names for dashboard
-    let iface_names: Vec<String> = config
+    // Collect interface info for dashboard
+    let iface_infos: Vec<web::InterfaceInfo> = config
         .interfaces
         .iter()
         .enumerate()
         .map(|(idx, iface_cfg)| {
             let callsign = iface_cfg.callsign.as_deref().unwrap_or(&config.mycall);
-            format!("{}_{}", callsign, idx)
+            let name = format!("{}_{}", callsign, idx);
+            let detail = match iface_cfg.iface_type {
+                InterfaceType::Serial => {
+                    let device = iface_cfg.device.as_deref().unwrap_or("unknown");
+                    let speed = iface_cfg.speed.unwrap_or(9600);
+                    format!("{} @ {}", device, speed)
+                }
+                InterfaceType::Tcp => {
+                    let host = iface_cfg.host.as_deref().unwrap_or("unknown");
+                    let port = iface_cfg.port.unwrap_or(0);
+                    format!("{}:{}", host, port)
+                }
+                _ => String::new(),
+            };
+            web::InterfaceInfo { name, detail }
         })
         .collect();
 
@@ -153,7 +167,7 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     let dashboard_state: Option<web::SharedDashboardState> = config.web.as_ref().map(|_| {
         Arc::new(Mutex::new(web::DashboardState::new(
             &config.mycall,
-            iface_names,
+            iface_infos,
         )))
     });
 
@@ -270,7 +284,7 @@ async fn async_main(config: Config, erlang_enabled: bool) {
 
     // Spawn APRS-IS client
     let aprsis_handle = if let Some(ref aprsis_cfg) = config.aprsis {
-        let client = AprsIsClient::new(&config.mycall, aprsis_cfg);
+        let client = AprsIsClient::new(&config.mycall, aprsis_cfg, log_aprsis);
         let aprsis_packet_tx = packet_tx.clone();
         let aprsis_dashboard = dashboard_state.clone();
         erlang_monitor.lock().unwrap().add_channel("APRSIS");

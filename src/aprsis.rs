@@ -66,11 +66,13 @@ pub struct AprsIsClient {
     filter: Option<String>,
     /// How long to wait without server data before considering connection dead.
     heartbeat_timeout: Duration,
+    /// Whether to emit debug logs for individual APRS-IS packets.
+    log_traffic: bool,
 }
 
 impl AprsIsClient {
     /// Create a new APRS-IS client from the station callsign and APRS-IS config.
-    pub fn new(mycall: &str, config: &AprsIsConfig) -> Self {
+    pub fn new(mycall: &str, config: &AprsIsConfig, log_traffic: bool) -> Self {
         let heartbeat_secs = config
             .heartbeat_timeout
             .unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT_SECS);
@@ -81,6 +83,7 @@ impl AprsIsClient {
             servers: config.servers.clone(),
             filter: config.filter.clone(),
             heartbeat_timeout: Duration::from_secs(heartbeat_secs),
+            log_traffic,
         }
     }
 
@@ -269,7 +272,9 @@ impl AprsIsClient {
                             }
 
                             // Valid APRS packet line
-                            debug!("APRS-IS rx: {}", line);
+                            if self.log_traffic {
+                                debug!("APRS-IS rx: {}", line);
+                            }
                             let packet = Arc::new(Packet::new(line, "APRSIS", true));
 
                             match packet_tx.try_send(packet) {
@@ -449,7 +454,7 @@ mod tests {
     #[test]
     fn client_new_stores_config() {
         let config = test_config();
-        let client = AprsIsClient::new("OH2MQK-1", &config);
+        let client = AprsIsClient::new("OH2MQK-1", &config, false);
 
         assert_eq!(client.login, "OH2MQK-1");
         assert_eq!(client.passcode, 12345);
@@ -461,7 +466,7 @@ mod tests {
     #[test]
     fn client_new_default_heartbeat() {
         let config = test_config_minimal();
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         assert_eq!(
             client.heartbeat_timeout,
@@ -474,7 +479,7 @@ mod tests {
     #[test]
     fn login_line_with_filter() {
         let config = test_config();
-        let client = AprsIsClient::new("OH2MQK-1", &config);
+        let client = AprsIsClient::new("OH2MQK-1", &config, false);
         let line = client.login_line();
 
         assert_eq!(
@@ -489,7 +494,7 @@ mod tests {
     #[test]
     fn login_line_without_filter() {
         let config = test_config_minimal();
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
         let line = client.login_line();
 
         assert_eq!(
@@ -504,7 +509,7 @@ mod tests {
     #[test]
     fn login_line_ends_with_crlf() {
         let config = test_config();
-        let client = AprsIsClient::new("TEST-1", &config);
+        let client = AprsIsClient::new("TEST-1", &config, false);
         let line = client.login_line();
 
         assert!(line.ends_with("\r\n"));
@@ -513,7 +518,7 @@ mod tests {
     #[test]
     fn login_line_starts_with_user() {
         let config = test_config();
-        let client = AprsIsClient::new("TEST-1", &config);
+        let client = AprsIsClient::new("TEST-1", &config, false);
         let line = client.login_line();
 
         assert!(line.starts_with("user "));
@@ -522,7 +527,7 @@ mod tests {
     #[test]
     fn login_line_contains_vers() {
         let config = test_config();
-        let client = AprsIsClient::new("TEST-1", &config);
+        let client = AprsIsClient::new("TEST-1", &config, false);
         let line = client.login_line();
 
         assert!(line.contains(&format!("vers vaprs {}", env!("CARGO_PKG_VERSION"))));
@@ -531,7 +536,7 @@ mod tests {
     #[test]
     fn login_line_receive_only_shows_negative_passcode() {
         let config = test_config_minimal();
-        let client = AprsIsClient::new("RX-ONLY", &config);
+        let client = AprsIsClient::new("RX-ONLY", &config, false);
         let line = client.login_line();
 
         assert!(line.contains("pass -1"));
@@ -594,7 +599,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -667,7 +672,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (_write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -722,7 +727,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, _packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -793,7 +798,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(1), // 1 second timeout for test speed
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, _packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -829,7 +834,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: None,
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, _packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (_write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -873,7 +878,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(30),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, _packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -940,7 +945,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1004,7 +1009,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1057,7 +1062,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, _packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1132,7 +1137,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(30),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (_write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1193,7 +1198,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let client_task = tokio::spawn(async move {
             client.run(packet_tx, write_rx, None).await;
@@ -1259,7 +1264,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: None,
         };
-        let client = AprsIsClient::new("TEST", &config);
+        let client = AprsIsClient::new("TEST", &config, false);
         assert_eq!(client.servers.len(), 2);
     }
 
@@ -1307,7 +1312,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(30),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1385,7 +1390,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1465,7 +1470,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);
@@ -1498,7 +1503,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: None,
         };
-        let client = AprsIsClient::new("EVIL\r\nINJECTED", &config);
+        let client = AprsIsClient::new("EVIL\r\nINJECTED", &config, false);
         let line = client.login_line();
         // Should be exactly one line (ending with \r\n)
         let without_crlf = line.trim_end_matches("\r\n");
@@ -1524,7 +1529,7 @@ mod tests {
             filter: Some("m/100\r\nINJECTED".to_string()),
             heartbeat_timeout: None,
         };
-        let client = AprsIsClient::new("TEST", &config);
+        let client = AprsIsClient::new("TEST", &config, false);
         let line = client.login_line();
         let without_crlf = line.trim_end_matches("\r\n");
         assert!(
@@ -1620,7 +1625,7 @@ mod tests {
             filter: None,
             heartbeat_timeout: Some(5),
         };
-        let client = AprsIsClient::new("N0CALL", &config);
+        let client = AprsIsClient::new("N0CALL", &config, false);
 
         let (packet_tx, mut packet_rx) = mpsc::channel::<SharedPacket>(32);
         let (write_tx, write_rx) = mpsc::channel::<String>(32);

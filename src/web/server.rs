@@ -476,7 +476,10 @@ mod tests {
     async fn test_server_serves_static_assets() {
         let state = std::sync::Arc::new(std::sync::Mutex::new(crate::web::DashboardState::new(
             "TEST-1",
-            vec!["radio0".to_string()],
+            vec![crate::web::InterfaceInfo {
+                name: "radio0".to_string(),
+                detail: "/dev/ttyUSB0 @ 9600".to_string(),
+            }],
         )));
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -739,7 +742,10 @@ mod tests {
     async fn test_bounded_read_normal_request_still_works() {
         let state = std::sync::Arc::new(std::sync::Mutex::new(crate::web::DashboardState::new(
             "TEST-1",
-            vec!["radio0".to_string()],
+            vec![crate::web::InterfaceInfo {
+                name: "radio0".to_string(),
+                detail: "/dev/ttyUSB0 @ 9600".to_string(),
+            }],
         )));
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
