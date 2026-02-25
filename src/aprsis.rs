@@ -48,6 +48,12 @@ pub fn aprs_passcode(callsign: &str) -> i16 {
     hash & 0x7FFF
 }
 
+/// Strip all CR and LF characters from an APRS-IS line to prevent protocol injection.
+/// The caller is responsible for appending the required `\r\n` terminator.
+fn sanitize_aprsis_line(s: &str) -> String {
+    s.replace(['\r', '\n'], "")
+}
+
 /// APRS-IS client that maintains a connection to an APRS-IS server.
 pub struct AprsIsClient {
     /// Callsign used for login.
@@ -80,14 +86,18 @@ impl AprsIsClient {
 
     /// Format the APRS-IS login line.
     ///
-    /// Format: `user CALL pass PASSCODE vers vaprs 0.1.0[ filter FILTER]\r\n`
+    /// Format: `user CALL pass PASSCODE vers vaprs VERSION[ filter FILTER]\r\n`
     pub fn login_line(&self) -> String {
+        let clean_login = self.login.replace(['\r', '\n'], "");
         let mut line = format!(
-            "user {} pass {} vers vaprs 0.1.0",
-            self.login, self.passcode
+            "user {} pass {} vers vaprs {}",
+            clean_login,
+            self.passcode,
+            env!("CARGO_PKG_VERSION")
         );
         if let Some(ref f) = self.filter {
-            line.push_str(&format!(" filter {}", f));
+            let clean_filter = f.replace(['\r', '\n'], "");
+            line.push_str(&format!(" filter {}", clean_filter));
         }
         line.push_str("\r\n");
         line
@@ -217,6 +227,7 @@ impl AprsIsClient {
 
         // Flush any packets that were buffered during reconnect backoff
         for data in pending_writes.drain(..) {
+            let data = sanitize_aprsis_line(&data);
             let to_send = if data.ends_with("\r\n") {
                 data
             } else {
@@ -287,6 +298,7 @@ impl AprsIsClient {
                     match msg {
                         Some(data) => {
                             // Write this packet
+                            let data = sanitize_aprsis_line(&data);
                             let to_send = if data.ends_with("\r\n") {
                                 data
                             } else {
@@ -302,6 +314,7 @@ impl AprsIsClient {
                             while batch_count < WRITE_BATCH_MAX {
                                 match write_rx.try_recv() {
                                     Ok(data) => {
+                                        let data = sanitize_aprsis_line(&data);
                                         let to_send = if data.ends_with("\r\n") {
                                             data
                                         } else {
@@ -466,7 +479,10 @@ mod tests {
 
         assert_eq!(
             line,
-            "user OH2MQK-1 pass 12345 vers vaprs 0.1.0 filter m/100\r\n"
+            format!(
+                "user OH2MQK-1 pass 12345 vers vaprs {} filter m/100\r\n",
+                env!("CARGO_PKG_VERSION")
+            )
         );
     }
 
@@ -476,7 +492,13 @@ mod tests {
         let client = AprsIsClient::new("N0CALL", &config);
         let line = client.login_line();
 
-        assert_eq!(line, "user N0CALL pass -1 vers vaprs 0.1.0\r\n");
+        assert_eq!(
+            line,
+            format!(
+                "user N0CALL pass -1 vers vaprs {}\r\n",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]
@@ -503,7 +525,7 @@ mod tests {
         let client = AprsIsClient::new("TEST-1", &config);
         let line = client.login_line();
 
-        assert!(line.contains("vers vaprs 0.1.0"));
+        assert!(line.contains(&format!("vers vaprs {}", env!("CARGO_PKG_VERSION"))));
     }
 
     #[test]
@@ -1466,6 +1488,87 @@ mod tests {
             .expect("client task panicked");
 
         server.await.expect("server panicked");
+    }
+
+    #[test]
+    fn login_line_strips_crlf_from_callsign() {
+        let config = AprsIsConfig {
+            passcode: 12345,
+            servers: vec!["test:14580".to_string()],
+            filter: None,
+            heartbeat_timeout: None,
+        };
+        let client = AprsIsClient::new("EVIL\r\nINJECTED", &config);
+        let line = client.login_line();
+        // Should be exactly one line (ending with \r\n)
+        let without_crlf = line.trim_end_matches("\r\n");
+        assert!(
+            !without_crlf.contains('\r'),
+            "login line should not contain embedded CR"
+        );
+        assert!(
+            !without_crlf.contains('\n'),
+            "login line should not contain embedded LF"
+        );
+        assert!(
+            line.contains("EVILINJECTED"),
+            "CRLF should be stripped, not replaced"
+        );
+    }
+
+    #[test]
+    fn login_line_strips_crlf_from_filter() {
+        let config = AprsIsConfig {
+            passcode: 12345,
+            servers: vec!["test:14580".to_string()],
+            filter: Some("m/100\r\nINJECTED".to_string()),
+            heartbeat_timeout: None,
+        };
+        let client = AprsIsClient::new("TEST", &config);
+        let line = client.login_line();
+        let without_crlf = line.trim_end_matches("\r\n");
+        assert!(
+            !without_crlf.contains('\r'),
+            "login line should not contain embedded CR"
+        );
+        assert!(
+            !without_crlf.contains('\n'),
+            "login line should not contain embedded LF"
+        );
+        assert!(
+            line.contains("m/100INJECTED"),
+            "CRLF should be stripped from filter"
+        );
+    }
+
+    // ---- sanitize_aprsis_line tests ----
+
+    #[test]
+    fn sanitize_aprsis_line_clean() {
+        assert_eq!(sanitize_aprsis_line("TEST>APRS:data"), "TEST>APRS:data");
+    }
+
+    #[test]
+    fn sanitize_aprsis_line_strips_cr() {
+        assert_eq!(sanitize_aprsis_line("TEST>APRS:da\rta"), "TEST>APRS:data");
+    }
+
+    #[test]
+    fn sanitize_aprsis_line_strips_lf() {
+        assert_eq!(sanitize_aprsis_line("TEST>APRS:da\nta"), "TEST>APRS:data");
+    }
+
+    #[test]
+    fn sanitize_aprsis_line_strips_crlf_injection() {
+        assert_eq!(
+            sanitize_aprsis_line("TEST>APRS:data\r\nINJECTED>APRS:evil"),
+            "TEST>APRS:dataINJECTED>APRS:evil"
+        );
+    }
+
+    #[test]
+    fn sanitize_aprsis_line_empty() {
+        assert_eq!(sanitize_aprsis_line(""), "");
     }
 
     #[tokio::test]

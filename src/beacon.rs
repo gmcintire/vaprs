@@ -12,6 +12,10 @@ use tracing::warn;
 
 use crate::config::{BeaconMode, Config};
 
+/// Maximum length for beacon content read from files or command output.
+/// Prevents unbounded memory usage from malicious or misconfigured sources.
+const MAX_BEACON_OUTPUT_LEN: usize = 1024;
+
 /// A single beacon definition.
 pub struct Beacon {
     /// Beacon content type.
@@ -327,6 +331,12 @@ fn format_beacon_content(
                 if text.is_empty() {
                     None
                 } else {
+                    // Truncate to maximum beacon output length
+                    let text = if text.len() > MAX_BEACON_OUTPUT_LEN {
+                        &text[..MAX_BEACON_OUTPUT_LEN]
+                    } else {
+                        text
+                    };
                     let line = format!("{}>APRS:{}", mycall, text);
                     Some(maybe_add_via(&line, via))
                 }
@@ -400,6 +410,11 @@ fn run_beacon_command(command: &str, timeout: Duration) -> Option<String> {
                 }
                 let output = child.wait_with_output().ok()?;
                 let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let text = if text.len() > MAX_BEACON_OUTPUT_LEN {
+                    text[..MAX_BEACON_OUTPUT_LEN].to_string()
+                } else {
+                    text
+                };
                 return if text.is_empty() { None } else { Some(text) };
             }
             Ok(None) => {
@@ -795,5 +810,63 @@ mod tests {
         };
         let result = format_beacon_content(&content, "TEST-1", None);
         assert_eq!(result.unwrap(), "TEST-1>APRS:!6029.50N/02505.43E>");
+    }
+
+    #[test]
+    fn test_beacon_file_content_truncated() {
+        // Create a temp file with content exceeding MAX_BEACON_OUTPUT_LEN
+        let dir = std::env::temp_dir();
+        let path = dir.join("vaprs_test_beacon_large.txt");
+        let large_content = "X".repeat(2000);
+        std::fs::write(&path, &large_content).unwrap();
+
+        let content = BeaconContent::File(path.to_string_lossy().to_string());
+        let result = format_beacon_content(&content, "TEST-1", None).unwrap();
+
+        // The formatted line is "TEST-1>APRS:" + truncated content
+        // Total payload should be at most MAX_BEACON_OUTPUT_LEN (1024) + header
+        let payload = result.strip_prefix("TEST-1>APRS:").unwrap();
+        assert!(
+            payload.len() <= MAX_BEACON_OUTPUT_LEN,
+            "beacon file content should be truncated to {} bytes, got {}",
+            MAX_BEACON_OUTPUT_LEN,
+            payload.len()
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_beacon_file_short_content_not_truncated() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("vaprs_test_beacon_short.txt");
+        let short_content = "!4903.50N/07201.75W-Short beacon";
+        std::fs::write(&path, short_content).unwrap();
+
+        let content = BeaconContent::File(path.to_string_lossy().to_string());
+        let result = format_beacon_content(&content, "TEST-1", None).unwrap();
+        assert_eq!(result, format!("TEST-1>APRS:{}", short_content));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_beacon_exec_output_truncated() {
+        // Use printf to generate output exceeding MAX_BEACON_OUTPUT_LEN
+        let result = run_beacon_command("printf 'Y%.0s' $(seq 1 2000)", Duration::from_secs(5));
+
+        match result {
+            Some(text) => {
+                assert!(
+                    text.len() <= MAX_BEACON_OUTPUT_LEN,
+                    "beacon exec output should be truncated to {} bytes, got {}",
+                    MAX_BEACON_OUTPUT_LEN,
+                    text.len()
+                );
+            }
+            None => {
+                // Command may not be available in all test environments, skip
+            }
+        }
     }
 }

@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
@@ -26,6 +26,66 @@ const SSE_STATE_INTERVAL_MS: u64 = 5000;
 
 /// SSE poll interval for new packets.
 const SSE_POLL_INTERVAL_MS: u64 = 200;
+
+/// Maximum length of an HTTP request line (method + path + version).
+const MAX_REQUEST_LINE_LEN: usize = 8192;
+
+/// Maximum number of HTTP headers to accept.
+const MAX_HEADER_COUNT: usize = 64;
+
+/// Maximum length of a single HTTP header line.
+const MAX_HEADER_LINE_LEN: usize = 8192;
+
+/// Maximum lifetime for an SSE connection (safety net for zombies).
+const SSE_MAX_LIFETIME_SECS: u64 = 300;
+
+/// Read a single line from `reader`, limited to `max_len` bytes.
+/// Returns `Ok(Some(line))` on success, `Ok(None)` on EOF, or `Err` if the
+/// line exceeds the limit or an I/O error occurs.
+async fn read_line_bounded<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_len: usize,
+) -> std::io::Result<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+    let mut buf = Vec::with_capacity(256);
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            // EOF
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            return String::from_utf8(buf)
+                .map(Some)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+        }
+        // Find newline in available data
+        if let Some(newline_pos) = available.iter().position(|&b| b == b'\n') {
+            let to_take = newline_pos + 1; // include the newline
+            if buf.len() + to_take > max_len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "line too long",
+                ));
+            }
+            buf.extend_from_slice(&available[..to_take]);
+            reader.consume(to_take);
+            return String::from_utf8(buf)
+                .map(Some)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+        }
+        // No newline found in available data
+        let available_len = available.len();
+        if buf.len() + available_len > max_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "line too long",
+            ));
+        }
+        buf.extend_from_slice(available);
+        reader.consume(available_len);
+    }
+}
 
 /// Parsed HTTP request (method + path only).
 #[derive(Debug, PartialEq)]
@@ -99,19 +159,26 @@ async fn handle_connection(
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
-    // Read the request line
-    let mut line = String::new();
-    let n = tokio::time::timeout(
+    // Read the request line (bounded)
+    let line = match tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        reader.read_line(&mut line),
+        read_line_bounded(&mut reader, MAX_REQUEST_LINE_LEN),
     )
     .await
-    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request timeout"))?
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-    if n == 0 {
-        return Ok(());
-    }
+    {
+        Ok(Ok(Some(line))) => line,
+        Ok(Ok(None)) => return Ok(()),
+        Ok(Err(_)) => {
+            write_response(&mut writer, 400, "text/plain", "Bad Request").await?;
+            return Ok(());
+        }
+        Err(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request timeout",
+            ));
+        }
+    };
 
     let request = match parse_request_line(line.trim()) {
         Some(r) => r,
@@ -121,19 +188,37 @@ async fn handle_connection(
         }
     };
 
-    // Consume remaining headers (we don't need them, but must read them)
+    // Consume remaining headers (bounded)
+    let mut header_count = 0;
     loop {
-        let mut header_line = String::new();
-        let n = tokio::time::timeout(
+        let header_line = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            reader.read_line(&mut header_line),
+            read_line_bounded(&mut reader, MAX_HEADER_LINE_LEN),
         )
         .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "header timeout"))?
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) => {
+                write_response(&mut writer, 400, "text/plain", "Bad Request").await?;
+                return Ok(());
+            }
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "header timeout",
+                ));
+            }
+        };
 
-        if n == 0 || header_line.trim().is_empty() {
+        if header_line.trim().is_empty() {
             break;
+        }
+
+        header_count += 1;
+        if header_count >= MAX_HEADER_COUNT {
+            write_response(&mut writer, 400, "text/plain", "Bad Request").await?;
+            return Ok(());
         }
     }
 
@@ -258,8 +343,16 @@ async fn handle_sse(
     poll_interval.tick().await;
     state_interval.tick().await;
 
+    let sse_deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(SSE_MAX_LIFETIME_SECS);
+
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(sse_deadline) => {
+                debug!("SSE connection lifetime expired");
+                sse_count.fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
             _ = poll_interval.tick() => {
                 // Check for new packets
                 let new_packets = {
@@ -324,6 +417,7 @@ pub fn format_sse_event(event: &str, data: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncBufReadExt;
 
     #[test]
     fn test_parse_request_line_get() {
@@ -543,6 +637,144 @@ mod tests {
         }
 
         assert!(response.starts_with("HTTP/1.1 405"));
+
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_oversized_request_line_returns_400() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(crate::web::DashboardState::new(
+            "TEST-1",
+            vec![],
+        )));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_state = state.clone();
+        let server_handle = tokio::spawn(async move {
+            let sse_count = Arc::new(AtomicU32::new(0));
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, server_state, sse_count)
+                .await
+                .ok();
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // Send a request line that exceeds MAX_REQUEST_LINE_LEN (8192)
+        let huge_path = "X".repeat(9000);
+        let request = format!("GET /{} HTTP/1.1\r\n\r\n", huge_path);
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = String::new();
+        let mut reader = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => response.push_str(&line),
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            response.starts_with("HTTP/1.1 400"),
+            "oversized request should get 400, got: {}",
+            &response[..std::cmp::min(50, response.len())]
+        );
+
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_too_many_headers_returns_400() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(crate::web::DashboardState::new(
+            "TEST-1",
+            vec![],
+        )));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_state = state.clone();
+        let server_handle = tokio::spawn(async move {
+            let sse_count = Arc::new(AtomicU32::new(0));
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, server_state, sse_count)
+                .await
+                .ok();
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // Send valid request line followed by >64 headers
+        stream.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        for i in 0..70 {
+            let header = format!("X-Header-{}: value\r\n", i);
+            stream.write_all(header.as_bytes()).await.unwrap();
+        }
+        stream.write_all(b"\r\n").await.unwrap();
+
+        let mut response = String::new();
+        let mut reader = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => response.push_str(&line),
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            response.starts_with("HTTP/1.1 400"),
+            "too many headers should get 400, got: {}",
+            &response[..std::cmp::min(50, response.len())]
+        );
+
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_bounded_read_normal_request_still_works() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(crate::web::DashboardState::new(
+            "TEST-1",
+            vec!["radio0".to_string()],
+        )));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_state = state.clone();
+        let server_handle = tokio::spawn(async move {
+            let sse_count = Arc::new(AtomicU32::new(0));
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, server_state, sse_count)
+                .await
+                .unwrap();
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /api/state HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut response = String::new();
+        let mut reader = BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => response.push_str(&line),
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "normal request should still get 200"
+        );
+        assert!(response.contains("application/json"));
 
         let _ = server_handle.await;
     }

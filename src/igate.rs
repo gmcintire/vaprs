@@ -19,6 +19,9 @@ const FORBIDDEN_DEST_PREFIXES: &[&str] =
 /// Prefixes that are forbidden in via (digipeater path) callsigns.
 const FORBIDDEN_VIA_PREFIXES: &[&str] = &["RFONLY", "NOGATE", "TCPIP", "TCPXX"];
 
+/// Maximum recursion depth for third-party frame unwrapping.
+const MAX_THIRD_PARTY_DEPTH: u8 = 3;
+
 /// Check if a source callsign is forbidden for iGating.
 ///
 /// Returns true if the callsign starts with any forbidden source prefix
@@ -51,6 +54,14 @@ pub fn is_forbidden_via(callsign: &str) -> bool {
         .any(|prefix| clean.starts_with(prefix))
 }
 
+/// Truncate a string at the first CR or LF character to prevent CRLF injection.
+pub(crate) fn sanitize_line(s: &str) -> &str {
+    match s.find(&['\r', '\n'][..]) {
+        Some(pos) => &s[..pos],
+        None => s,
+    }
+}
+
 /// Extract via callsigns from a TNC2 address string.
 ///
 /// Given "SRC>DST,VIA1,VIA2*", returns vec!["VIA1", "VIA2*"].
@@ -79,6 +90,10 @@ fn extract_via_callsigns(addresses: &str) -> Vec<&str> {
 /// The formatted line has the q-construct appended:
 /// `SOURCE>DEST,VIA1,VIA2,qAR,GATECALL:payload`
 pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> Option<String> {
+    gate_to_aprsis_inner(packet, gate_call, 0)
+}
+
+fn gate_to_aprsis_inner(packet: &Packet, gate_call: &str, depth: u8) -> Option<String> {
     let payload = packet.payload();
 
     // Drop APRS query packets (payload starts with '?')
@@ -88,10 +103,11 @@ pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> Option<String> {
 
     // Handle 3rd-party frames: payload starts with '}'
     if let Some(inner) = payload.strip_prefix('}') {
-        // The inner frame is a full TNC2 packet string
-        // Recursively filter the inner frame
+        if depth >= MAX_THIRD_PARTY_DEPTH {
+            return None;
+        }
         let inner_packet = Packet::new(inner, &packet.source_interface, packet.is_aprs);
-        return gate_to_aprsis(&inner_packet, gate_call);
+        return gate_to_aprsis_inner(&inner_packet, gate_call, depth + 1);
     }
 
     // Check forbidden source
@@ -113,7 +129,8 @@ pub fn gate_to_aprsis(packet: &Packet, gate_call: &str) -> Option<String> {
     }
 
     // Build the gated packet with q-construct
-    let addresses = packet.addresses();
+    let addresses = sanitize_line(packet.addresses());
+    let payload = sanitize_line(payload);
     Some(format!("{},qAR,{}:{}", addresses, gate_call, payload))
 }
 
@@ -195,6 +212,9 @@ pub fn gate_to_rf(packet: &Packet, gate_call: &str, history: &HistoryDb) -> Opti
     }
 
     // Format as 3rd-party frame: }SRC>DST,TCPIP,GATECALL*:payload
+    let source = sanitize_line(source);
+    let dest = sanitize_line(dest);
+    let payload = sanitize_line(payload);
     Some(format!(
         "}}{}>{},TCPIP,{}*:{}",
         source, dest, gate_call, payload
@@ -576,5 +596,87 @@ mod tests {
         let p = pkt("KB1ABC>APRS:?APRS?");
         let result = gate_to_rf(&p, "MYGATE", &history);
         assert!(result.is_none());
+    }
+
+    // --- CRLF injection sanitization tests ---
+
+    #[test]
+    fn test_sanitize_line_clean() {
+        assert_eq!(sanitize_line("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_sanitize_line_cr() {
+        assert_eq!(sanitize_line("hello\rinjected"), "hello");
+    }
+
+    #[test]
+    fn test_sanitize_line_lf() {
+        assert_eq!(sanitize_line("hello\ninjected"), "hello");
+    }
+
+    #[test]
+    fn test_sanitize_line_crlf() {
+        assert_eq!(sanitize_line("hello\r\ninjected"), "hello");
+    }
+
+    #[test]
+    fn test_sanitize_line_empty() {
+        assert_eq!(sanitize_line(""), "");
+    }
+
+    #[test]
+    fn test_gate_to_aprsis_crlf_in_payload() {
+        let p = pkt("TEST>APRS:data\r\nINJECTED>APRS:evil");
+        let result = gate_to_aprsis(&p, "GATE").unwrap();
+        assert!(!result.contains('\r'));
+        assert!(!result.contains('\n'));
+        assert!(result.contains("data"));
+        assert!(!result.contains("INJECTED"));
+    }
+
+    #[test]
+    fn test_gate_to_rf_crlf_in_payload() {
+        let mut history = make_history();
+        history.heard("WA1ABC", "radio0", None);
+        let p = pkt("KB1ABC>APRS::WA1ABC   :Hello\r\nINJECTED");
+        let result = gate_to_rf(&p, "MYGATE", &history).unwrap();
+        assert!(!result.contains('\r'));
+        assert!(!result.contains('\n'));
+    }
+
+    // --- Third-party frame recursion depth limit tests ---
+
+    #[test]
+    fn test_deeply_nested_third_party_frames() {
+        // 10 levels of properly-formed nesting - should be rejected (depth > MAX_THIRD_PARTY_DEPTH)
+        // Each level is a valid third-party frame: }CALL>APRS:}CALL>APRS:...
+        let mut nested = "TEST>APRS:data".to_string();
+        for i in (1..=10).rev() {
+            nested = format!("L{}>APRS:}}{}", i, nested);
+        }
+        let p = pkt(&nested);
+        let result = gate_to_aprsis(&p, "GATE");
+        assert!(
+            result.is_none(),
+            "deeply nested third-party frames should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_third_party_frame_at_max_depth() {
+        // Exactly 3 levels of nesting should still work
+        // }}}TEST>APRS:data  (3 unwraps)
+        let p = pkt("L1>APRS:}L2>APRS:}L3>APRS:}TEST>APRS:data");
+        let result = gate_to_aprsis(&p, "GATE");
+        assert!(result.is_some(), "3 levels of nesting should be allowed");
+    }
+
+    #[test]
+    fn test_third_party_frame_exceeds_max_depth() {
+        // 4 levels of nesting should be rejected
+        let p = pkt("L1>APRS:}L2>APRS:}L3>APRS:}L4>APRS:}TEST>APRS:data");
+        let result = gate_to_aprsis(&p, "GATE");
+        assert!(result.is_none(), "4 levels of nesting should be rejected");
     }
 }
