@@ -18,12 +18,10 @@ case "$1" in
         # Create log directory
         install -d -o vaprs -g vaprs -m 750 /var/log/vaprs
 
-        # Enable and restart the service on install/upgrade
+        # Enable and start the service on install/upgrade
         systemctl daemon-reload
         systemctl enable vaprs.service 2>/dev/null || true
-        if systemctl is-active --quiet vaprs.service; then
-            systemctl restart vaprs.service
-        fi
+        systemctl restart vaprs.service
         ;;
 esac
 
