@@ -16,3 +16,4 @@ pub mod packet;
 pub mod parse_aprs;
 pub mod router;
 pub mod telemetry;
+pub mod web;

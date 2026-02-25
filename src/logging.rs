@@ -206,6 +206,7 @@ mod tests {
             location: None,
             aprsis: None,
             logging: None,
+            web: None,
             interfaces: vec![],
             beacons: vec![],
             digipeaters: vec![],

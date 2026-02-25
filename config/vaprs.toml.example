@@ -111,3 +111,9 @@ cycle_size = "20m"
 # [[telemetry]]
 # source = "N0CALL-10"
 # destination = "N0CALL-10"
+
+# Web monitoring dashboard
+# Uncomment to enable the built-in dashboard.
+# [web]
+# listen = "127.0.0.1"
+# port = 14501

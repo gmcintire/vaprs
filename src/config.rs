@@ -213,12 +213,29 @@ pub struct TelemetryConfig {
     pub destination: Option<String>,
 }
 
+fn default_web_listen() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_web_port() -> u16 {
+    14501
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    #[serde(default = "default_web_listen")]
+    pub listen: String,
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub mycall: String,
     pub location: Option<LocationConfig>,
     pub aprsis: Option<AprsIsConfig>,
     pub logging: Option<LoggingConfig>,
+    pub web: Option<WebConfig>,
 
     #[serde(rename = "interface", default)]
     pub interfaces: Vec<InterfaceConfig>,
@@ -458,5 +475,40 @@ mod tests {
         assert_eq!(decimal_lon_to_aprs(0.0).unwrap(), "00000.00E");
         assert_eq!(decimal_lon_to_aprs(-72.029167).unwrap(), "07201.75W");
         assert_eq!(decimal_lon_to_aprs(151.21).unwrap(), "15112.60E");
+    }
+
+    #[test]
+    fn test_web_config_parsing() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [web]
+            listen = "0.0.0.0"
+            port = 8080
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let web = config.web.unwrap();
+        assert_eq!(web.listen, "0.0.0.0");
+        assert_eq!(web.port, 8080);
+    }
+
+    #[test]
+    fn test_web_config_defaults() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+            [web]
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let web = config.web.unwrap();
+        assert_eq!(web.listen, "127.0.0.1");
+        assert_eq!(web.port, 14501);
+    }
+
+    #[test]
+    fn test_web_config_absent() {
+        let toml_str = r#"
+            mycall = "N0CALL-1"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.web.is_none());
     }
 }

@@ -413,6 +413,17 @@ fn parse_item(payload: &str) -> AprsData {
     }
 }
 
+/// Extract position coordinates from a full TNC2 packet line, if present.
+pub fn extract_position(tnc2: &str) -> Option<(f64, f64)> {
+    let payload = tnc2.split(':').nth(1)?;
+    match parse_aprs(payload) {
+        AprsData::Position { lat, lon, .. } => Some((lat, lon)),
+        AprsData::Object { lat, lon, .. } => Some((lat, lon)),
+        AprsData::Item { lat, lon, .. } => Some((lat, lon)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -990,5 +1001,24 @@ mod tests {
             }
             _ => panic!("expected Message"),
         }
+    }
+
+    // --- extract_position tests ---
+
+    #[test]
+    fn extract_position_from_tnc2() {
+        let pos = extract_position("OH2MQK-1>APRS:!6029.50N/02505.43E>").unwrap();
+        assert!(approx_eq(pos.0, 60.491667, 0.001));
+        assert!(approx_eq(pos.1, 25.090500, 0.001));
+    }
+
+    #[test]
+    fn extract_position_from_message() {
+        assert!(extract_position("OH2MQK-1>APRS::BLN1     :test").is_none());
+    }
+
+    #[test]
+    fn extract_position_no_payload() {
+        assert!(extract_position("OH2MQK-1>APRS").is_none());
     }
 }

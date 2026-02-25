@@ -6,10 +6,11 @@
 // is rotated into history, and rolling 10-minute and 60-minute summaries
 // are recomputed from the stored minute samples.
 
+use serde::Serialize;
 use std::time::Instant;
 
 /// Statistics for a single time window.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WindowStats {
     pub rx_packets: u64,
     pub tx_packets: u64,
@@ -155,6 +156,28 @@ impl ErlangMonitor {
     pub fn channels(&self) -> &[ChannelStats] {
         &self.channels
     }
+
+    /// Snapshot all channel stats for the dashboard.
+    pub fn snapshot(&self) -> Vec<ErlangChannelSnapshot> {
+        self.channels
+            .iter()
+            .map(|ch| ErlangChannelSnapshot {
+                name: ch.name.clone(),
+                last_1min: ch.last_1min.clone(),
+                last_10min: ch.last_10min.clone(),
+                last_60min: ch.last_60min.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Serializable snapshot of a single channel's erlang stats.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErlangChannelSnapshot {
+    pub name: String,
+    pub last_1min: WindowStats,
+    pub last_10min: WindowStats,
+    pub last_60min: WindowStats,
 }
 
 impl Default for ErlangMonitor {

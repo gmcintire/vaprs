@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vaprs dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <div class="header-left">
+      <span class="logo">vaprs</span>
+      <span id="mycall" class="mycall"></span>
+    </div>
+    <div class="header-right">
+      <span id="uptime"></span>
+      <span id="clock"></span>
+    </div>
+  </header>
+
+  <div class="cards">
+    <div class="card" id="card-aprsis">
+      <div class="card-label">APRS-IS</div>
+      <div class="card-value">
+        <span id="aprsis-indicator" class="indicator disconnected"></span>
+        <span id="aprsis-status">Disconnected</span>
+      </div>
+      <div class="card-detail" id="aprsis-server"></div>
+    </div>
+    <div class="card" id="card-interfaces">
+      <div class="card-label">Interfaces</div>
+      <div class="card-value" id="interface-count">0 active</div>
+    </div>
+    <div class="card" id="card-stations">
+      <div class="card-label">Stations</div>
+      <div class="card-value" id="stations-heard">0 heard</div>
+    </div>
+    <div class="card" id="card-traffic">
+      <div class="card-label">Packets/min</div>
+      <div class="card-value" id="traffic">Rx: 0 Tx: 0</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <span>Live Packet Feed</span>
+      <button id="pause-btn" class="btn-pause" title="Pause feed">&#9646;&#9646;</button>
+    </div>
+    <div id="packet-feed" class="packet-feed"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Erlang Statistics</div>
+    <table id="erlang-table" class="data-table">
+      <thead>
+        <tr>
+          <th>Interface</th>
+          <th>1 min Rx/Tx</th>
+          <th>10 min Rx/Tx</th>
+          <th>60 min Rx/Tx</th>
+          <th>Drops</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Recently Heard Stations</div>
+    <table id="stations-table" class="data-table">
+      <thead>
+        <tr>
+          <th>Callsign</th>
+          <th>Last Heard</th>
+          <th>Interface</th>
+          <th>Count</th>
+          <th>Position</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

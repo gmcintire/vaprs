@@ -2,6 +2,8 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use std::sync::{Arc, Mutex};
+
 use vaprs::aprsis::AprsIsClient;
 use vaprs::beacon::BeaconScheduler;
 use vaprs::config::{Config, InterfaceType, Protocol};
@@ -11,6 +13,7 @@ use vaprs::interface::{Interface, InterfaceHandle, InterfaceRegistry};
 use vaprs::logging;
 use vaprs::packet::SharedPacket;
 use vaprs::router::Router;
+use vaprs::web;
 
 /// Default PID file path when running as a daemon.
 const PID_FILE_PATH: &str = "/var/run/vaprs.pid";
@@ -135,11 +138,37 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     // Set up Erlang monitor
     let mut erlang_monitor = vaprs::erlang::ErlangMonitor::new();
 
+    // Collect interface names for dashboard
+    let iface_names: Vec<String> = config
+        .interfaces
+        .iter()
+        .enumerate()
+        .map(|(idx, iface_cfg)| {
+            let callsign = iface_cfg.callsign.as_deref().unwrap_or(&config.mycall);
+            format!("{}_{}", callsign, idx)
+        })
+        .collect();
+
+    // Set up dashboard state (if web is configured)
+    let dashboard_state: Option<web::SharedDashboardState> = config.web.as_ref().map(|_| {
+        Arc::new(Mutex::new(web::DashboardState::new(
+            &config.mycall,
+            iface_names,
+        )))
+    });
+
     // Set up APRS-IS write channel
     let (aprsis_write_tx, aprsis_write_rx) = mpsc::channel::<String>(APRSIS_WRITE_CHANNEL_SIZE);
 
     // Register a consumer for the iGate (Rx-iGate: RF -> APRS-IS)
     let mut igate_rx = router.add_consumer("igate", CONSUMER_CHANNEL_SIZE);
+
+    // Register a consumer for the dashboard (if web is configured)
+    let dashboard_rx = if dashboard_state.is_some() {
+        Some(router.add_consumer("dashboard", CONSUMER_CHANNEL_SIZE))
+    } else {
+        None
+    };
 
     // Spawn radio interfaces from config
     for (idx, iface_cfg) in config.interfaces.iter().enumerate() {
@@ -281,6 +310,38 @@ async fn async_main(config: Config, erlang_enabled: bool) {
         }
     });
 
+    // Spawn dashboard consumer task (if web is configured)
+    let dash_consumer_state = dashboard_state.clone();
+    let dashboard_consumer_handle = if let Some(mut rx) = dashboard_rx {
+        let ds = dash_consumer_state.unwrap();
+        Some(tokio::spawn(async move {
+            while let Some(packet) = rx.recv().await {
+                let now_epoch = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let snap = web::PacketSnapshot {
+                    timestamp: now_epoch,
+                    source_call: packet.source_call().to_string(),
+                    dest_call: packet.dest_call().to_string(),
+                    interface: packet.source_interface.clone(),
+                    payload: packet.payload().to_string(),
+                    raw: packet.tnc2.clone(),
+                    sequence: 0,
+                };
+
+                let position = vaprs::parse_aprs::extract_position(&packet.tnc2);
+
+                let mut state = ds.lock().unwrap();
+                state.push_packet(snap);
+                state.record_station(packet.source_call(), &packet.source_interface, position);
+            }
+        }))
+    } else {
+        None
+    };
+
     // Spawn beacon timer task
     let beacon_aprsis_tx = aprsis_write_tx.clone();
     let beacon_handle = tokio::spawn(async move {
@@ -305,12 +366,17 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     });
 
     // Spawn Erlang rotation timer (if enabled)
+    let erlang_dashboard = dashboard_state.clone();
     let erlang_handle = if erlang_enabled {
         Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
                 erlang_monitor.rotate_all();
+                if let Some(ref ds) = erlang_dashboard {
+                    let snapshot = erlang_monitor.snapshot();
+                    ds.lock().unwrap().erlang_stats = snapshot;
+                }
             }
         }))
     } else {
@@ -325,6 +391,19 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     let router_handle = tokio::spawn(async move {
         router.run().await;
     });
+
+    // Spawn web server (if configured)
+    let web_handle = if let Some(ref web_cfg) = config.web {
+        if let Some(ref ds) = dashboard_state {
+            let handle = web::server::spawn_web_server(web_cfg, ds.clone());
+            Some(handle)
+        } else {
+            None
+        }
+    } else {
+        info!("no [web] configuration, dashboard disabled");
+        None
+    };
 
     // Wait for shutdown signal
     info!("all tasks running, waiting for shutdown signal");
@@ -355,6 +434,12 @@ async fn async_main(config: Config, erlang_enabled: bool) {
     igate_handle.abort();
     beacon_handle.abort();
     if let Some(handle) = erlang_handle {
+        handle.abort();
+    }
+    if let Some(handle) = dashboard_consumer_handle {
+        handle.abort();
+    }
+    if let Some(handle) = web_handle {
         handle.abort();
     }
 
