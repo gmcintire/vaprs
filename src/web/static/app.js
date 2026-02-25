@@ -167,7 +167,7 @@
       return;
     }
     var html = '';
-    var limit = Math.min(stations.length, 50);
+    var limit = Math.min(stations.length, 20);
     for (var i = 0; i < limit; i++) {
       var st = stations[i];
       html += '<tr>' +
